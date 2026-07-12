@@ -1,0 +1,39 @@
+{
+    "name": "phpauth/phpauth",
+    "description": "A secure user authentication class for PHP websites, using a powerful password hashing system and attack blocking to keep your website and users secure.",
+    "type": "library",
+    "keywords": [
+        "authentication",
+        "class",
+        "secure"
+    ],
+    "homepage": "https://phpauth.github.io/PHPAuth/",
+    "license": "MIT",
+    "require": {
+        "php": "^7.4 || ^8.0",
+        "ext-pdo": "*",
+        "ext-mbstring": "*",
+        "ext-json": "*"
+    },
+    "suggest": {
+        "phpauth/phpauth.l10n": "^0.1.0",
+        "phpauth/phpauth.email-validator": "^0.1.1",
+        "ganlvtech/kcaptcha": "^1.0",
+        "bjeavons/zxcvbn-php": "^1.0",
+        "google/recaptcha": "^1.2",
+        "phpauth/phpauth.mailer.phpmailer": "*",
+        "phpauth/phpauth.mailer.nette": "*"
+    },
+    "require-dev": {
+        "phpauth/phpauth.l10n": "^0.1.0",
+        "phpauth/phpauth.email-validator": "^0.1.1",
+        "bjeavons/zxcvbn-php": "^1.0",
+        "phpauth/phpauth.mailer.phpmailer": "*",
+        "phpauth/phpauth.mailer.nette": "*"
+    },
+    "autoload": {
+        "psr-4": {
+            "PHPAuth\\": "sources/"
+        }
+    }
+}

@@ -1,0 +1,350 @@
+/* archyart style */
+
+.nav-tabs .nav-link.active{color:#c1272d;border-color:#c1272d}
+
+.btn-primary{background-color: #c1272d; border-color: #c1272d; }
+.btn-primary:hover,
+.btn-primary:focus{background-color: #a22126;}
+
+.bg-card-gradient{background-color: #c1272d;background-image: none; border-color: #c1272d;}
+
+.text-primary{color:#c1272d !important;}
+
+.page-link.active, 
+.active > .page-link,
+.page-link:hover{background-color: #c1272d;background-image: none; border-color: #c1272d;}
+
+
+/*
+|--------------------------------------------------------------------------
+| ARCHY MEDIA - SCROLL ORIZZONTALE FISSO AL PIEDE DATATABLE
+|--------------------------------------------------------------------------
+*/
+
+.archy-filter-scrollbar {
+    position: fixed !important;
+    bottom: 0 !important;
+    z-index: 1025 !important;
+
+    left: 0;
+    width: 100%;
+
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+
+    height: 18px !important;
+    background: #fff;
+
+    border-top: 1px solid #dcdcdc;
+    border-bottom: 1px solid #dcdcdc;
+}
+
+.archy-filter-scrollbar-inner {
+    height: 1px;
+}
+
+#grid_table_wrapper .table-responsive {
+    scrollbar-width: auto !important;
+}
+
+#grid_table_wrapper .table-responsive::-webkit-scrollbar {
+    height: 14px !important;
+}
+
+
+#grid_table td .card-grid {
+    width: 5rem !important;
+    max-width: 5rem !important;
+    min-width: 5rem !important;
+}
+
+#grid_table td .card-grid .card-img-top {
+    width: 5rem !important;
+    height: 5rem !important;
+    overflow: hidden !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+}
+
+#grid_table td .card-grid .card-img-top img {
+    width: 100% !important;
+    height: 100% !important;
+    object-fit: cover !important;
+    display: block !important;
+}
+
+/*
+|--------------------------------------------------------------------------
+| ARCHY MEDIA - DATATABLE HEADER / FOOTER FIXED
+|--------------------------------------------------------------------------
+*/
+
+/* Header originale + header clonato da FixedHeader */
+#grid_table.dataTable thead th,
+#grid_table.dataTable thead td,
+.fixedHeader-floating.dataTable thead th,
+.fixedHeader-floating.dataTable thead td,
+.fixedHeader-locked.dataTable thead th,
+.fixedHeader-locked.dataTable thead td {
+    position: relative !important;
+    padding-left: 12px !important;
+    padding-right: 32px !important;
+    text-align: left !important;
+    white-space: nowrap !important;
+    box-sizing: border-box !important;
+}
+
+/* Icone ordinamento DataTables 2 */
+#grid_table.dataTable thead span.dt-column-order,
+.fixedHeader-floating.dataTable thead span.dt-column-order,
+.fixedHeader-locked.dataTable thead span.dt-column-order {
+    position: absolute !important;
+    right: 10px !important;
+    left: auto !important;
+    top: 50% !important;
+    transform: translateY(-50%) !important;
+}
+
+/* Fallback vecchie classi sorting */
+#grid_table.dataTable thead .sorting:before,
+#grid_table.dataTable thead .sorting:after,
+#grid_table.dataTable thead .sorting_asc:before,
+#grid_table.dataTable thead .sorting_asc:after,
+#grid_table.dataTable thead .sorting_desc:before,
+#grid_table.dataTable thead .sorting_desc:after,
+.fixedHeader-floating.dataTable thead .sorting:before,
+.fixedHeader-floating.dataTable thead .sorting:after,
+.fixedHeader-floating.dataTable thead .sorting_asc:before,
+.fixedHeader-floating.dataTable thead .sorting_asc:after,
+.fixedHeader-floating.dataTable thead .sorting_desc:before,
+.fixedHeader-floating.dataTable thead .sorting_desc:after {
+    right: 10px !important;
+    left: auto !important;
+}
+
+/* Footer originale + footer clonato da FixedHeader */
+#grid_table.dataTable tfoot th,
+#grid_table.dataTable tfoot td,
+.fixedHeader-floating.dataTable tfoot th,
+.fixedHeader-floating.dataTable tfoot td,
+.fixedHeader-locked.dataTable tfoot th,
+.fixedHeader-locked.dataTable tfoot td {
+    box-sizing: border-box !important;
+    padding-left: 10px !important;
+    padding-right: 10px !important;
+    vertical-align: middle !important;
+}
+
+/* Campi filtro */
+#grid_table.dataTable tfoot input,
+#grid_table.dataTable tfoot select,
+.fixedHeader-floating.dataTable tfoot input,
+.fixedHeader-floating.dataTable tfoot select,
+.fixedHeader-locked.dataTable tfoot input,
+.fixedHeader-locked.dataTable tfoot select {
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+}
+
+/* Select2 nei filtri */
+#grid_table.dataTable tfoot .select2-container,
+.fixedHeader-floating.dataTable tfoot .select2-container,
+.fixedHeader-locked.dataTable tfoot .select2-container {
+    width: 100% !important;
+}
+
+/* Wrapper footer DataTables */
+div.dt-scroll-foot table.dataTable {
+    width: 100% !important;
+}
+
+div.dt-scroll-footInner {
+    padding-right: 0 !important;
+}
+
+/*
+|--------------------------------------------------------------------------
+| ARCHY MEDIA - DASHBOARD
+|--------------------------------------------------------------------------
+*/
+
+body.data-dashboard {
+    overflow-y: auto !important;
+}
+
+body.data-dashboard .dashboard-calendar,
+body.data-dashboard .dashboard-stats {
+    overflow: visible !important;
+}
+
+
+body.data-dashboard {
+    overflow-y: auto !important;
+}
+
+body.data-dashboard .dashboard {
+    align-items: flex-start !important;
+}
+
+body.data-dashboard .dashboard-calendar {
+    min-height: 880px !important;
+}
+
+body.data-dashboard .dashboard-calendar .card-body {
+    overflow: visible !important;
+}
+
+body.data-dashboard #appCalendar {
+    min-height: 820px !important;
+}
+
+body.data-dashboard .fc-view-harness {
+    min-height: 760px !important;
+}
+
+@media (max-width: 767.98px) {
+    body.data-dashboard .card.bg-100.shadow-none.border {
+        text-align: center;
+        background-position: center !important;
+    }
+
+    body.data-dashboard .card.bg-100.shadow-none.border .flex-between-center {
+        justify-content: center !important;
+    }
+
+    body.data-dashboard .card.bg-100.shadow-none.border .col-sm-auto {
+        width: 100%;
+        padding: 16px 12px;
+        justify-content: center !important;
+        flex-wrap: wrap;
+        text-align: center;
+    }
+
+    body.data-dashboard .card.bg-100.shadow-none.border .col-sm-auto img {
+        margin-left: 0 !important;
+        margin-right: 0 !important;
+    }
+
+    body.data-dashboard .card.bg-100.shadow-none.border .col-sm-auto img:first-child {
+        width: 82px;
+    }
+
+    body.data-dashboard .card.bg-100.shadow-none.border .col-sm-auto img:last-child {
+        width: 118px;
+    }
+
+    body.data-dashboard .card.bg-100.shadow-none.border > .row > .col-md-auto {
+        display: none !important;
+    }
+}
+
+#grid_table th,
+#grid_table td {
+    box-sizing: border-box;
+}
+
+#grid_table th[data-column="archy_art_catalog.materiali"],
+#grid_table td:nth-child(4) {
+    min-width: 160px;
+    max-width: 160px;
+}
+
+#grid_table th[data-column="archy_art_catalog.collezione"],
+#grid_table td:nth-child(8) {
+    min-width: 220px;
+    max-width: 220px;
+}
+
+#grid_table th[data-column="archy_art_catalog.tecnica"],
+#grid_table td:nth-child(7) {
+    min-width: 150px;
+    max-width: 150px;
+}
+
+.archy-fixed-filters-footer table {
+    margin-bottom: 0 !important;
+}
+
+.archy-fixed-filters-footer th {
+    box-sizing: border-box;
+    background: #fff;
+    padding: 4px !important;
+}
+
+.archy-fixed-filters-footer input,
+.archy-fixed-filters-footer select {
+    width: 100% !important;
+}
+
+#grid_table tfoot {
+    height: 0 !important;
+}
+
+#grid_table tfoot tr,
+#grid_table tfoot th {
+    height: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    line-height: 0 !important;
+    overflow: hidden !important;
+}
+
+#grid_table tfoot input,
+#grid_table tfoot select,
+#grid_table tfoot .checkbox {
+    display: none !important;
+}
+
+body.data-grid {
+    padding-bottom: 58px !important;
+}
+
+
+
+.modal-backdrop {
+    z-index: 1040 !important;
+}
+
+.modal {
+    z-index: 1050 !important;
+}
+
+
+
+.archy-fixed-filters-footer {
+    z-index: 1020 !important;
+}
+
+#grid_table_wrapper .dataTables_scroll,
+#grid_table_wrapper .dt-scroll,
+#grid_table_wrapper .dt-scroll-body {
+    overflow-x: auto !important;
+}
+
+#grid_table {
+    width: max-content !important;
+    min-width: 100% !important;
+}
+
+/*
+|--------------------------------------------------------------------------
+| ARCHY MEDIA - NASCONDE FILTRI ORIGINALI DATATABLE
+|--------------------------------------------------------------------------
+*/
+#grid_table_wrapper .dt-scroll-foot {
+    height: 0 !important;
+    overflow: hidden !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+}
+
+/* nasconde la barra nativa in fondo alla tabella, ma NON quella custom fissa */
+#grid_table_wrapper .dt-scroll-body {
+    scrollbar-width: none !important;
+}
+
+#grid_table_wrapper .dt-scroll-body::-webkit-scrollbar {
+    height: 0 !important;
+}
