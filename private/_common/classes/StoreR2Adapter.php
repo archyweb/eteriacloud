@@ -14,6 +14,12 @@ class StoreR2Adapter extends StoreCloud
         parent::__construct();
         
         $this->bucket = $this->cf_storage_bucket_name;
+        $this->ensureStoreCloudConfig([
+            'STORECLOUD_CF_ACCOUNT_ID' => $this->cf_account_id,
+            'STORECLOUD_R2_ACCESS_KEY' => $this->cf_storage_access_key,
+            'STORECLOUD_R2_SECRET_KEY' => $this->cf_storage_secret_key,
+            'customer_bucket' => $this->cf_storage_bucket_name
+        ], 'Cloudflare R2');
 
         $this->s3 = new S3Client([
             'version' => 'latest',

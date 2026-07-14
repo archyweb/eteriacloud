@@ -56,50 +56,105 @@ class StoreCloud
         $this->config=require $this->subdomain_root.'/config-local.php';
         $this->env = $this->loadEnv();
         
-        $this->cf_account_id = $this->envValue('STORECLOUD_CF_ACCOUNT_ID');
-        $this->cf_api_token = $this->envValue('STORECLOUD_CF_API_TOKEN');
-        $this->notify_api_token = $this->envValue('STORECLOUD_NOTIFY_API_TOKEN');
-        $this->cf_images_hash = $this->envValue('STORECLOUD_CF_IMAGES_HASH');
-        $this->cf_customer_hash = $this->envValue('STORECLOUD_CF_CUSTOMER_HASH');
-        $this->cf_storage_access_key = $this->envValue('STORECLOUD_R2_ACCESS_KEY');
-        $this->cf_storage_secret_key = $this->envValue('STORECLOUD_R2_SECRET_KEY');
+        $this->cf_account_id = $this->envValue(['STORECLOUD_CF_ACCOUNT_ID', 'CLOUDFLARE_ACCOUNT_ID', 'CF_ACCOUNT_ID', 'cf_account_id']);
+        $this->cf_api_token = $this->envValue(['STORECLOUD_CF_API_TOKEN', 'CLOUDFLARE_API_TOKEN', 'CF_API_TOKEN', 'cf_api_token']);
+        $this->notify_api_token = $this->envValue(['STORECLOUD_NOTIFY_API_TOKEN', 'NOTIFY_API_TOKEN', 'notify_api_token']);
+        $this->cf_images_hash = $this->envValue(['STORECLOUD_CF_IMAGES_HASH', 'CLOUDFLARE_IMAGES_HASH', 'CF_IMAGES_HASH', 'cf_images_hash']);
+        $this->cf_customer_hash = $this->envValue(['STORECLOUD_CF_CUSTOMER_HASH', 'CLOUDFLARE_CUSTOMER_HASH', 'CF_CUSTOMER_HASH', 'cf_customer_hash']);
+        $this->cf_storage_access_key = $this->envValue(['STORECLOUD_R2_ACCESS_KEY', 'CLOUDFLARE_R2_ACCESS_KEY', 'R2_ACCESS_KEY', 'cf_storage_access_key']);
+        $this->cf_storage_secret_key = $this->envValue(['STORECLOUD_R2_SECRET_KEY', 'CLOUDFLARE_R2_SECRET_KEY', 'R2_SECRET_KEY', 'cf_storage_secret_key']);
         $this->cf_storage_bucket_name = $this->config['customer_bucket'];
         $this->cf_storage_bucket_link = $this->config['customer_bucket_link'];
     }
 
     private function loadEnv(): array
     {
-        $envPath = dirname(__DIR__) . '/.env';
-        if (!is_readable($envPath)) {
-            return [];
-        }
-
+        $envPaths = [
+            dirname(__DIR__) . '/.env',
+            dirname(dirname(dirname(__DIR__))) . '/.env',
+            $this->subdomain_root . '/.env'
+        ];
+        $envPaths = array_values(array_unique($envPaths));
         $env = [];
-        foreach (file($envPath, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $line) {
-            $line = trim($line);
-            if ($line === '' || strpos($line, '#') === 0 || strpos($line, '=') === false) {
+        $readablePathFound = false;
+
+        foreach ($envPaths as $envPath) {
+            if (!is_readable($envPath)) {
                 continue;
             }
 
-            list($key, $value) = explode('=', $line, 2);
-            $env[trim($key)] = trim($value, " \t\n\r\0\x0B\"'");
+            $readablePathFound = true;
+            foreach (file($envPath, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $line) {
+                $line = trim($line);
+                if ($line === '' || strpos($line, '#') === 0 || strpos($line, '=') === false) {
+                    continue;
+                }
+
+                list($key, $value) = explode('=', $line, 2);
+                $key = preg_replace('/^\xEF\xBB\xBF/', '', trim($key));
+                $key = preg_replace('/^export\s+/', '', $key);
+                $value = trim($value);
+
+                if ($value !== '' && !in_array($value[0], ['"', "'"], true)) {
+                    $commentPosition = strpos($value, ' #');
+                    if ($commentPosition !== false) {
+                        $value = substr($value, 0, $commentPosition);
+                    }
+                }
+
+                $env[trim($key)] = trim($value, " \t\n\r\0\x0B\"'");
+            }
+        }
+
+        if (!$readablePathFound) {
+            error_log('[StoreCloud] env file not readable. Checked: ' . implode(', ', $envPaths));
+            return [];
         }
 
         return $env;
     }
 
-    private function envValue(string $key, string $default = ''): string
+    private function envValue($keys, string $default = ''): string
     {
-        if (isset($this->env[$key]) && $this->env[$key] !== '') {
-            return $this->env[$key];
-        }
+        $keys = is_array($keys) ? $keys : [$keys];
 
-        $value = getenv($key);
-        if ($value !== false && $value !== '') {
-            return $value;
+        foreach ($keys as $key) {
+            if (isset($this->env[$key]) && $this->env[$key] !== '') {
+                return $this->env[$key];
+            }
+
+            if (isset($_ENV[$key]) && $_ENV[$key] !== '') {
+                return $_ENV[$key];
+            }
+
+            if (isset($_SERVER[$key]) && $_SERVER[$key] !== '') {
+                return $_SERVER[$key];
+            }
+
+            $value = getenv($key);
+            if ($value !== false && $value !== '') {
+                return $value;
+            }
         }
 
         return $default;
+    }
+
+    protected function ensureStoreCloudConfig(array $values, string $context): void
+    {
+        $missing = [];
+
+        foreach ($values as $name => $value) {
+            if ($value === null || trim((string) $value) === '') {
+                $missing[] = $name;
+            }
+        }
+
+        if (!empty($missing)) {
+            $message = 'Configurazione Cloudflare incompleta per ' . $context . ': ' . implode(', ', $missing);
+            error_log('[StoreCloud] ' . $message);
+            throw new Exception($message);
+        }
     }
     
     
@@ -192,61 +247,73 @@ class StoreCloud
             throw new Exception($e->getMessage());
         }
     }
+
+    private function cloudflareErrorMessage($response): string
+    {
+        if (!isset($response->errors) || !is_array($response->errors) || empty($response->errors)) {
+            return 'Risposta Cloudflare non valida.';
+        }
+
+        $messages = [];
+        foreach ($response->errors as $error) {
+            $messages[] = $error->message ?? json_encode($error);
+        }
+
+        return implode(' | ', array_filter($messages));
+    }
+
+    private function publicUrl(string $path): string
+    {
+        if (preg_match('#^https?://#i', $path)) {
+            return $path;
+        }
+
+        $baseUrl = $this->config['subdomain_url'] ?? $this->config['root_url'] ?? '';
+
+        if ($baseUrl === '') {
+            $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+            $host = $_SERVER['HTTP_HOST'] ?? '';
+            $baseUrl = $host !== '' ? $scheme . '://' . $host : '';
+        }
+
+        return rtrim($baseUrl, '/') . '/' . ltrim($path, '/');
+    }
     
     public function uploadToCloud($file,$intent){ // $src,$file_name,$intent,$field_name,$file_ext
             global $app;
-            //$storeImages = new StoreCloud();
-            //$StatsCloudStorageService = new StatsCloudStorageService($this->app);
+            
             $physical_path=$this->subdomain_root.'/assets/images/';
             $physical_storage_path=$this->subdomain_root.'/assets/storage/';
             if(!is_dir($physical_storage_path)):
                     mkdir($physical_storage_path,0777);
             endif;
 
-           /* $total_cloud_img=0;
-            $total_cloud_weight=0;
-            $total_local_img=0;
-            $total_local_weight=0;*/
-
             $filename_ext = pathinfo($file['name'], PATHINFO_EXTENSION);
             $file_size = filesize($file['tmp_name']);
             list($width, $height) = getimagesize($file['tmp_name']);            
+            $newFileName = $this->normalizeFileName($file['name']);
 
             if($width<12000 && $height<12000 && $file_size<10000000){ // rientra nei parametri cloudflare
-                    $newFileName = $this->normalizeFileName($file['name']);
                     //$newfilename = $newfilename_clean . '.' . $filename_ext;
-                    $imageId = $this->uploadImageFile($file['tmp_name'], $newFileName, false, ['customer'=>$app->config['customer_name'],'intent'=>$intent,'field'=>$file['field'], 'extension'=>$file['type'], 'file_name'=>$newfilename], '');
+                    $imageId = $this->uploadImageFile($file['tmp_name'], $newFileName, false, ['customer'=>$app->config['customer_name'],'intent'=>$intent,'field'=>$file['field'], 'extension'=>$file['type'], 'file_name'=>$newFileName], '');
                     //$this->db->query("update archy_scheda_catalogo set $field_name='".$imageId."' where id=".$this->insert_id); // setto id immagine creata da cloudflare
-                    /*$total_cloud_img++;
-                    $total_cloud_weight+=$storeImages->formatBytes($file_size,1);*/
-
+                
             }else{ // per le immagini pesanti
                     $storeLocalAdapter = new StoreLocalAdapter();
                     $new_fullpath_filename=$storeLocalAdapter->upload($file['tmp_name'],$file['name'],'',$file['field_name'],'img'); //carico immagine su server
                     $new_fullpath_filename_explode=explode('/',$new_fullpath_filename);
                     $new_filename = end($new_fullpath_filename_explode);
                     if($width<12000 && $height<12000){
-                           /* $total_local_img++;
-                            $total_local_weight+=$storeImages->formatBytes(filesize($this->subdomain_root.$new_fullpath_filename),1);*/
-
+                     
                             $this->optimize($this->subdomain_root.$new_fullpath_filename,$new_filename); // comprimo l'immagine salvandola in un altra cartella
                             $file_size_compress = filesize($physical_storage_path.'temp/'.$new_filename);
                             $imageId = $this->uploadImageFileFromURL('/assets/storage/temp/'.$new_filename, $new_filename, false, ['customer'=>$app->config['customer_name'],'intent'=>$intent,'field'=>$file['field'], 'extension'=>$file['type'], 'file_name'=>$new_filename], '');
                             //$this->db->query("update archy_scheda_catalogo set $field_name='".$imageId."' where id=".$this->insert_id); // setto id immagine creata da cloudflare
 
-                           /* $total_cloud_img++;
-                            $total_cloud_weight+=$storeImages->formatBytes($file_size_compress,1);  */    
                             unlink($physical_storage_path.'temp/'.$new_filename); // cancello immagine compressa
                     }
             }
-           // $StatsCloudStorageService->track($file, 'cloud');
-            /*$this->db->query("update archy_stats set stats_total_cloud_img=stats_total_cloud_img+".$total_cloud_img.",stats_weight_cloud_img=stats_weight_cloud_img+".$total_cloud_weight.",stats_total_local_img=stats_total_local_img+".$total_local_img.",stats_weight_local_img=stats_weight_local_img+".$total_local_weight);
-            $StatsCloudStorageService->track([
-                    'total_cloud_img' => $total_cloud_img,
-                    'total_cloud_weight'      => $total_cloud_weight,
-                    'total_local_img'      => $total_local_img,
-                    'total_local_weight'      => $total_local_weight
-                ]);*/
+
             return [
                 "status"    => "success",
                 "file_name" => $imageId,
@@ -268,6 +335,11 @@ class StoreCloud
     public function uploadImageFile(string $image, string $name, bool $delete_after_upload = false, array $meta_data = [], string $custom_id = ''): string
     {
         try {
+            $this->ensureStoreCloudConfig([
+                'STORECLOUD_CF_ACCOUNT_ID' => $this->cf_account_id,
+                'STORECLOUD_CF_API_TOKEN' => $this->cf_api_token
+            ], 'Cloudflare Images');
+
             $payload = [
                 'file' => new \CURLFile($image, mime_content_type($image), $name),
             ];
@@ -283,6 +355,10 @@ class StoreCloud
             $response = self::post("https://api.cloudflare.com/client/v4/accounts/".$this->cf_account_id."/images/v1", $payload, ["Authorization: Bearer ".$this->cf_api_token]);
 
             $response = json_decode($response);
+            if (!$response || !isset($response->success)) {
+                throw new Exception('Risposta Cloudflare Images non valida.');
+            }
+
             if ($response->success) {
                 if ($delete_after_upload) {
                     unlink($image);
@@ -290,7 +366,7 @@ class StoreCloud
 
                 return $response->result->id;
             } else {
-                throw new Exception($response->errors[0]->message);
+                throw new Exception($this->cloudflareErrorMessage($response));
             }
         } catch (Exception $e) {
             throw new Exception($e->getMessage());
@@ -300,8 +376,14 @@ class StoreCloud
     public function uploadImageFileFromURL(string $image, string $name, bool $delete_after_upload = false, array $meta_data = [], string $custom_id = ''): string
     {
         try {
+            $this->ensureStoreCloudConfig([
+                'STORECLOUD_CF_ACCOUNT_ID' => $this->cf_account_id,
+                'STORECLOUD_CF_API_TOKEN' => $this->cf_api_token
+            ], 'Cloudflare Images');
+
+            $publicUrl = $this->publicUrl($image);
             $payload = [
-                'url' => 'https://'.$_SERVER['HTTP_HOST'].$image,
+                'url' => $publicUrl,
             ];
             if ($meta_data) {              
                 $payload['metadata'] = json_encode($meta_data);
@@ -315,6 +397,10 @@ class StoreCloud
             $response = self::post("https://api.cloudflare.com/client/v4/accounts/".$this->cf_account_id."/images/v1", $payload, ["Authorization: Bearer ".$this->cf_api_token]);
 
             $response = json_decode($response);
+            if (!$response || !isset($response->success)) {
+                throw new Exception('Risposta Cloudflare Images non valida.');
+            }
+
             if ($response->success) {
                 if ($delete_after_upload) {
                     unlink($image);
@@ -322,12 +408,11 @@ class StoreCloud
 
                 return $response->result->id;
             } else {
-                //throw new Exception($response->errors[0]->message);
-                error_log('ERRORE IMMAGINE: '.$image);
+                throw new Exception($this->cloudflareErrorMessage($response) . ' URL inviata a Cloudflare: ' . $publicUrl);
             }
         } catch (Exception $e) {
-            //throw new Exception($e->getMessage());
-            error_log('ERRORE IMMAGINE: '.$image);
+            error_log('[StoreCloud] Cloudflare Images upload failed for '.$image.': '.$e->getMessage());
+            throw new Exception($e->getMessage());
         }
     }
     
@@ -342,6 +427,11 @@ class StoreCloud
     public function deleteImage(string $image_id): bool
     {
         try {
+            $this->ensureStoreCloudConfig([
+                'STORECLOUD_CF_ACCOUNT_ID' => $this->cf_account_id,
+                'STORECLOUD_CF_API_TOKEN' => $this->cf_api_token
+            ], 'Cloudflare Images');
+
             $response = self::delete("https://api.cloudflare.com/client/v4/accounts/".$this->cf_account_id."/images/v1/{$image_id}", [
                 "Authorization: Bearer ".$this->cf_api_token
             ]);
@@ -388,6 +478,11 @@ class StoreCloud
     public function getOriginalImage(string $image_id): string
     {
         try {
+            $this->ensureStoreCloudConfig([
+                'STORECLOUD_CF_ACCOUNT_ID' => $this->cf_account_id,
+                'STORECLOUD_CF_API_TOKEN' => $this->cf_api_token
+            ], 'Cloudflare Images');
+
             $response = self::get("https://api.cloudflare.com/client/v4/accounts/".$this->cf_account_id."/images/v1/{$image_id}/blob", [
                 "Authorization: Bearer ".$this->cf_api_token
             ]);
@@ -408,6 +503,11 @@ class StoreCloud
     public function getImageDetail(string $image_id, string $detail_type, string $meta_detail = ''): string
     {
         try {
+            $this->ensureStoreCloudConfig([
+                'STORECLOUD_CF_ACCOUNT_ID' => $this->cf_account_id,
+                'STORECLOUD_CF_API_TOKEN' => $this->cf_api_token
+            ], 'Cloudflare Images');
+
             $response = self::get("https://api.cloudflare.com/client/v4/accounts/".$this->cf_account_id."/images/v1/{$image_id}", [
                 "Authorization: Bearer ".$this->cf_api_token
             ]);
