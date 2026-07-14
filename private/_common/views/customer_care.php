@@ -1,7 +1,7 @@
 <?php
 if(@$_GET['thread_id']!=''):
 	
-	$thread=new Support($_GET['thread_id']);
+	$thread=new Support($_GET['thread_id'],'support');
 	?>
    <div id="edit_buttons">
    	<a class="btn btn-primary" href="app.php?view=customer_care"><span class="glyphicon glyphicon-arrow-left"></span> Elenco Ticket</a>
@@ -15,12 +15,13 @@ if(@$_GET['thread_id']!=''):
 	foreach($thread->posts as $post):
 		?>
       <div class="post <?php echo $post->is_customer? 'customer':'operator'?>">
-         <bubble>
-            <h4><?php echo $post->user?></h4>
-            <div class="text">
-               <?php echo $post->text?>
-            </div>
-         </bubble>
+  
+		 <div class="alert alert-warning" role="alert">
+			<h4 class="alert-heading fw-semi-bold"><?php echo $post->user?></h4>
+			<p><?php echo $post->text?></p>
+			<hr />
+  			<p class="mb-0"><?php echo $post->date?></p>
+		</div>
       </div>
       <?php
 	endforeach;
@@ -29,13 +30,18 @@ if(@$_GET['thread_id']!=''):
 	
 	?>
    <hr>
-   <form method="post" action="app.php?do_action=ticket_reply" style="position:relative;">
-   	<textarea rows="1" cols="80" class="form-control" placeholder="Rispondi al ticket" name="reply" id="reply" style="resize: none;
-    overflow: hidden;
-    min-height: 50px;
-    padding-right:55px;"></textarea>
-      <button type="submit" class="btn btn-success" style="position:absolute;right:0;top:0;bottom:0;width:45px;"><span class="glyphicon glyphicon-arrow-right"></span></button>
-      <input type="hidden" name="thread_id" value="<?php echo $_GET['thread_id']?>">
+   <form method="post" action="app.php?do_action=ticket_reply">
+	<div class="mb-3">
+		<label for="reply">Rispondi al ticket</label>
+		<div class="alert alert-info" style="font-size:0.9em">
+			<strong>Nota:</strong> la risposta verrà inviata al cliente tramite e-mail.
+		</div>
+		</div>
+		<div class="mb-3">
+				<textarea rows="7" class="form-control" placeholder="Rispondi al ticket" name="reply" id="reply"></textarea>
+		</div>
+        <button type="submit" class="btn btn-success">Invia risposta <span class="far fa-arrow-alt-circle-right"></span></button>
+        <input type="hidden" name="thread_id" value="<?php echo $_GET['thread_id']?>">
    </form>
 		<script type="text/javascript">
 		window.onload=function(){
@@ -68,7 +74,7 @@ else:
 	';
 	?>
    <div id="edit_buttons">
-   	<a class="btn btn-primary" href="javascript:void(0)" onClick="location.reload()"><span class="glyphicon glyphicon-refresh"></span> Aggiorna</a>
+   	<a class="btn btn-primary" href="javascript:void(0)" onClick="location.reload()"><span class="fas fa-sync"></span> Aggiorna</a>
    </div>
 	<h3 style="margin-top:0">Tickets</h3>
 	<hr>

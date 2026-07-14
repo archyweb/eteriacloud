@@ -1,7 +1,7 @@
 <?php
 if(@$_GET['thread_id']!=''):
 	
-	$thread=new Support($_GET['thread_id']);
+	$thread=new Support($_GET['thread_id'],'customer');
 	?>
    <div id="edit_buttons">
    	<a class="btn btn-primary" href="app.php?view=tickets"><span class="glyphicon glyphicon-arrow-left"></span> Elenco Ticket</a>

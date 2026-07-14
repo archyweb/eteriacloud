@@ -33,10 +33,16 @@ class Support{
 	}
 	
 	public function __construct1($thread_id){
+		$this->__construct2($thread_id,'support');
+	}
+	
+	public function __construct2($thread_id,$source){
 		
 		$this->posts=[];
+		$thread_id=(int)$thread_id;
+		$db=$this->source_db($source);
 		
-		$thread=$this->support_db->query("select * from archy_support where thread_id=".$thread_id." order by id");
+		$thread=$db->query("select * from archy_support where thread_id=".$thread_id." order by id");
 		while($post=mysqli_fetch_object($thread)):
 			if($post->subject!=''):
 				$this->subject=$post->subject;
@@ -53,26 +59,51 @@ class Support{
 			$tmp->user=$post->user;
 			$tmp->is_customer=$post->is_customer;
 			$tmp->text=$post->request;
+			$tmp->date=App::latin_date_time($post->created_at);
 			$this->posts[]=$tmp;
 		endwhile;		
 		
 	}
 	
-	public function open_ticket($avoid_redirect=false){
-		$domain=isset($_POST['domain'])? $_POST['domain'] : $_SERVER['HTTP_HOST'];
-		$request=str_replace("\n","<br>",$_POST['assistance_request']);
-		$this->support_db->query("
+	private function source_db($source){
+		return $source=='customer'? $this->db : $this->support_db;
+	}
+	
+	private function insert_ticket_opening($db,$thread_id,$domain,$request){
+		$thread_id_sql=$thread_id? "thread_id=".(int)$thread_id."," : "";
+		$db->query("
 			insert into archy_support set 
+			".$thread_id_sql."
 			user='".addslashes($this->app->user_full_name)."',
-			domain='".$domain."',
+			domain='".addslashes($domain)."',
 			is_customer=1,
 			type='".addslashes($_POST['assistance_type'])."',
 			subject='".addslashes($_POST['assistance_subject'])."',
 			request='".addslashes($request)."',
 			reply_to='".addslashes($_POST['assistance_reply'])."'
 		");
-		$thread_id=$this->support_db->insert_id;
-		$this->support_db->query("update archy_support set thread_id=".$thread_id." where id=".$thread_id);
+		if(!$thread_id):
+			$thread_id=$db->insert_id;
+			$db->query("update archy_support set thread_id=".$thread_id." where id=".$thread_id);
+		endif;
+		return $thread_id;
+	}
+	
+	private function insert_ticket_reply($db,$thread_id,$reply,$is_customer){
+		$db->query("
+			insert into archy_support set
+			thread_id=".(int)$thread_id.",
+			user='".addslashes($this->app->user_full_name)."',
+			is_customer=".(int)$is_customer.",
+			request='".addslashes($reply)."'
+		");
+	}
+	
+	public function open_ticket($avoid_redirect=false){
+		$domain=isset($_POST['domain'])? $_POST['domain'] : $_SERVER['HTTP_HOST'];
+		$request=str_replace("\n","<br>",$_POST['assistance_request']);
+		$thread_id=$this->insert_ticket_opening($this->support_db,NULL,$domain,$request);
+		$this->insert_ticket_opening($this->db,$thread_id,$domain,$request);
 		
 		$message=new Message();
 		$params=[
@@ -105,12 +136,8 @@ class Support{
 	public function ticket_reply(){
 		
 		$reply=str_replace("\n","<br>",$_POST['reply']);
-		$this->support_db->query("
-			insert into archy_support set
-			thread_id=".$_POST['thread_id'].",
-			user='".addslashes($this->app->user_full_name)."',
-			request='".addslashes($reply)."'
-		");
+		$thread_id=(int)$_POST['thread_id'];
+		$this->insert_ticket_reply($this->support_db,$thread_id,$reply,0);
 		
 		$message=new Message();
 		$params=[
@@ -133,13 +160,9 @@ class Support{
 	public function user_reply(){
 		
 		$reply=str_replace("\n","<br>",$_POST['reply']);
-		$this->support_db->query("
-			insert into archy_support set
-			thread_id=".$_POST['thread_id'].",
-			user='".addslashes($this->app->user_full_name)."',
-			is_customer=1,
-			request='".addslashes($reply)."'
-		");
+		$thread_id=(int)$_POST['thread_id'];
+		$this->insert_ticket_reply($this->db,$thread_id,$reply,1);
+		$this->insert_ticket_reply($this->support_db,$thread_id,$reply,1);
 		
 		$message=new Message();
 		$params=[
@@ -159,10 +182,21 @@ class Support{
 	
 	public function tickets_list(){
 
-		$IDs=array_column(mysqli_fetch_all($this->db->query("select min(id) as id from archy_support group by (thread_id)"),MYSQLI_ASSOC),'id');
-		$threads=$this->db->query("select* from archy_support where id in (".join(',',$IDs).")");
+		$threads=$this->support_db->query("
+			select *
+			from archy_support
+			where id in (
+				select min_id from (
+					select min(id) as min_id
+					from archy_support
+					group by thread_id
+				) as first_posts
+			)
+			order by thread_id desc
+		");
 		$response='';
 		while($thread=mysqli_fetch_object($threads)):
+			$thread_id=$thread->thread_id;
 			$thread->created_at=App::latin_date_time($thread->created_at);
 			unset($thread->updated_at);
 			unset($thread->is_customer);
@@ -170,12 +204,12 @@ class Support{
 			$thread->type=$this->types[$thread->type];
 			if($thread->closed):
 				$close_button='
-					<a class="btn btn-sm btn-success" data-toggle="tooltip" title="Riapri ticket" href="app.php?do_action=reopen_ticket&thread_id='.$thread->thread_id.'"
+					<a class="btn btn-sm btn-success" data-toggle="tooltip" title="Riapri ticket" href="app.php?do_action=reopen_ticket&thread_id='.$thread_id.'"
 						onClick="return confirm(\'Riaprire il ticket?\')"><span class="glyphicon glyphicon-off"></span></a>';
 			else:
 				$close_button='
-					<a class="btn btn-sm btn-danger" data-toggle="tooltip" title="Chiudi ticket" href="app.php?do_action=close_ticket&thread_id='.$thread->thread_id.'"
-						onClick="return confirm(\'Il cliente non potra inviare ulteriori risposte.\nContinuare?\')"><span class="glyphicon glyphicon-off"></span></a>';
+					<a class="btn btn-sm btn-danger" data-toggle="tooltip" title="Chiudi ticket" href="app.php?do_action=close_ticket&thread_id='.$thread_id.'"
+						onClick="return confirm(\'Il cliente non potra inviare ulteriori risposte.\nContinuare?\')"><span class="fas fa-window-close"></span></a>';
 			endif;
 			unset($thread->thread_id);
 			$thread->closed=$this->closed[$thread->closed];
@@ -183,7 +217,7 @@ class Support{
 				<tr>
 					<td>'.join("</td><td>",(array)$thread).'</td>
 					<td>
-						<a class="btn btn-sm btn-info" data-toggle="tooltip" title="Dettagli" href="app.php?view=customer_care&thread_id='.$thread->id.'"><span class="glyphicon glyphicon-search"></span></a>
+						<a class="btn btn-sm btn-info" data-toggle="tooltip" title="Dettagli" href="app.php?view=customer_care&thread_id='.$thread_id.'"><span class="fas fa-search"></span></a>
 						'.$close_button.'
 					</td>
 				</tr>
@@ -194,18 +228,32 @@ class Support{
 	}
 	
 	public function close($thread_id){
-		$this->db->query("update archy_support set closed=1 where thread_id=".$thread_id);
+		$thread_id=(int)$thread_id;
+		$this->support_db->query("update archy_support set closed=1 where thread_id=".$thread_id);
 	}
 	
 	public function reopen($thread_id){
-		$this->db->query("update archy_support set closed=0 where thread_id=".$thread_id);
+		$thread_id=(int)$thread_id;
+		$this->support_db->query("update archy_support set closed=0 where thread_id=".$thread_id);
 	}
 	
 	public function user_tickets(){
 		
-		$threads=$this->support_db->query("select * from archy_support where domain='".$_SERVER['HTTP_HOST']."' group by (thread_id) order by thread_id desc");
+		$threads=$this->db->query("
+			select *
+			from archy_support
+			where id in (
+				select min_id from (
+					select min(id) as min_id
+					from archy_support
+					group by thread_id
+				) as first_posts
+			)
+			order by thread_id desc
+		");
 		$response='';
 		while($thread=mysqli_fetch_object($threads)):
+			$thread_id=$thread->thread_id;
 			$thread->created_at=App::latin_date_time($thread->created_at);
 			unset($thread->updated_at);
 			unset($thread->thread_id);
@@ -218,7 +266,7 @@ class Support{
 			$response.='
 				<tr>
 					<td>'.join("</td><td>",(array)$thread).'</td>
-					<td><a class="btn btn-sm btn-info" data-toggle="tooltip" title="Dettagli" href="app.php?view=tickets&thread_id='.$thread->id.'#reply"><span class="glyphicon glyphicon-search"></span></a></td>
+					<td><a class="btn btn-sm btn-info" data-toggle="tooltip" title="Dettagli" href="app.php?view=tickets&thread_id='.$thread_id.'#reply"><span class="fas fa-search"></span></a></td>
 				</tr>
 			';
 		endwhile;
