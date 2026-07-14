@@ -1,85 +1,124 @@
 <?php
 $u = $app->currentUser();
+$userEmail = $u['email'] ?? '';
+$emailLocalPart = '';
+
+if ($userEmail !== '' && strpos($userEmail, '@') !== false) {
+    $emailLocalPart = strtolower(substr($userEmail, 0, strpos($userEmail, '@')));
+}
 ?>
 
-    <form method="post" class="row g-3 needs-validation" novalidate="" action="/archy/app.php?do_action=changePassword">
-        <div class="col-12 mb-3">
-            <div class="row justify-content-center justify-content-sm-between">
-                <div class="col-sm-auto text-center">
-                    <h5 class="d-inline-block p-2">Cambio password</h5>
-                </div>
+<form method="post" class="row g-3 needs-validation" novalidate action="/archy/app.php?do_action=changePassword" id="change-password-form">
+    <div class="col-12 mb-3">
+        <div class="row justify-content-center justify-content-sm-between">
+            <div class="col-sm-auto text-center">
+                <h5 class="d-inline-block p-2">Cambio password</h5>
             </div>
         </div>
-        
-        
-      <div class="col-sm-7">
-        <label class="form-label" for="oldPassword">Vecchia password</label>
-        <input type="password" class="form-control" name="old_password" id="oldPassword" placeholder="vecchia password">
-      </div>
+    </div>
 
-      <div class="col-sm-7">
-        <label class="form-label" for="newPassword">Digita la nuova password</label>
-        <input type="password" class="form-control" name="new_password" id="newPassword" placeholder="nuova password">
-        <div class="form-text">(Minimo 8 caratteri alfanumerici, usa caratteri speciali come @,#,!)</div>
-        <div id="user-form-text"></div>
-      </div>
+    <div class="col-sm-7">
+        <label class="form-label" for="old-password">Password attuale</label>
+        <input type="password" class="form-control" name="old_password" id="old-password" autocomplete="current-password" required>
+    </div>
 
-      <div class="col-sm-7">
-        <label class="form-label" for="newPasswordRepeat">Ripeti nuova password</label>
-        <input type="password" class="form-control" name="new_password_repeat" id="newPasswordRepeat" placeholder="ripeti nuova password">
-      </div>
-      
-        <div class="col-sm-7">
-      <button type="submit" id="changeButton" class="btn btn-outline-secondary" disabled>Cambia password</button>
-      </div>
-    </form>
+    <div class="col-sm-7">
+        <label class="form-label" for="new-password">Nuova password</label>
+        <input type="password" class="form-control" name="new_password" id="new-password" autocomplete="new-password" required>
+    </div>
+
+    <div class="col-sm-7">
+        <label class="form-label" for="new-password-repeat">Ripeti nuova password</label>
+        <input type="password" class="form-control" name="new_password_repeat" id="new-password-repeat" autocomplete="new-password" required>
+    </div>
+
+    <div class="col-sm-7">
+        <ul class="list-unstyled fs-10 mb-3" id="password-rules" data-email-local="<?php echo htmlspecialchars($emailLocalPart, ENT_QUOTES, 'UTF-8'); ?>">
+            <li data-rule="length">Almeno 12 caratteri</li>
+            <li data-rule="lowercase">Almeno una lettera minuscola</li>
+            <li data-rule="uppercase">Almeno una lettera maiuscola</li>
+            <li data-rule="number">Almeno un numero</li>
+            <li data-rule="special">Almeno un carattere speciale</li>
+            <li data-rule="spaces">Nessuno spazio</li>
+            <li data-rule="different">Diversa dalla password attuale</li>
+            <li data-rule="email">Non contiene la parte iniziale dell email</li>
+            <li data-rule="strength">Complessita adeguata</li>
+            <li data-rule="match">Le password coincidono</li>
+        </ul>
+    </div>
+
+    <div class="col-sm-7">
+        <button type="submit" id="change-password-btn" class="btn btn-primary" disabled>Cambia password</button>
+    </div>
+</form>
 
 <script>
-  //selectors
-  let sel_password_field = document.getElementById("newPassword");
-  let sel_login_button = document.getElementById("changeButton");
-  let sel_user_info_paragraph = document.getElementById("user-form-text");
-
-  //add event listener for changes of password field
-  sel_password_field.addEventListener("keyup", function() {
-    //read current password
-    let password = sel_password_field.value;
-
-    //evaluate password strength
-    let result = zxcvbn(password);
-
-    //set minimum_score via php
-      <?php echo 'let minimum_score =' . $app->auth->config->password_min_score; ?>
-
-    //enable submit button
-    if (result.score >= minimum_score) {
-      sel_login_button.disabled = false;
-      sel_user_info_paragraph.style.color = "green";
-    } else {
-      sel_login_button.disabled = true;
-      sel_user_info_paragraph.style.color = "red";
+(function () {
+    var form = document.getElementById("change-password-form");
+    if (!form) {
+        return;
     }
 
-    //change user info paragraph text
-    switch (result.score) {
-      case 0:
-        sel_user_info_paragraph.innerHTML = "Troppo debole";
-        break;
-      case 1:
-        sel_user_info_paragraph.innerHTML = "Non sicura";
-        break;
-      case 2:
-        sel_user_info_paragraph.innerHTML = "Non abbastanza sicura";
-        break;
-      case 3:
-        sel_user_info_paragraph.innerHTML = "Buona";
-        break;
-      case 4:
-        sel_user_info_paragraph.innerHTML = "Eccellente";
-        break;
-      default:
-        sel_user_info_paragraph.innerHTML = "Troppo debole";
-        break;
+    var oldPassword = document.getElementById("old-password");
+    var newPassword = document.getElementById("new-password");
+    var repeatPassword = document.getElementById("new-password-repeat");
+    var submitButton = document.getElementById("change-password-btn");
+    var passwordRules = document.getElementById("password-rules");
+    var ruleItems = document.querySelectorAll("#password-rules [data-rule]");
+    var emailLocalPart = (passwordRules.dataset.emailLocal || "").toLowerCase();
+    var minimumScore = <?php echo max(3, (int) $app->auth->config->password_min_score); ?>;
+
+    function setRuleState(name, passed) {
+        var item = document.querySelector('#password-rules [data-rule="' + name + '"]');
+        if (!item) {
+            return;
+        }
+
+        item.classList.toggle("text-success", passed);
+        item.classList.toggle("text-danger", !passed);
+        item.dataset.passed = passed ? "1" : "0";
     }
-  })
+
+    function validatePassword() {
+        var current = oldPassword.value;
+        var password = newPassword.value;
+        var repeated = repeatPassword.value;
+        var passwordLower = password.toLowerCase();
+        var strength = typeof zxcvbn === "function" ? zxcvbn(password).score : minimumScore;
+        var rules = {
+            length: password.length >= 12,
+            lowercase: /[a-z]/.test(password),
+            uppercase: /[A-Z]/.test(password),
+            number: /[0-9]/.test(password),
+            special: /[^A-Za-z0-9\s]/.test(password),
+            spaces: !/\s/.test(password),
+            different: current === "" || current !== password,
+            email: emailLocalPart === "" || emailLocalPart.length < 4 || passwordLower.indexOf(emailLocalPart) === -1,
+            strength: strength >= minimumScore,
+            match: password !== "" && password === repeated
+        };
+        var valid = true;
+
+        Object.keys(rules).forEach(function (name) {
+            setRuleState(name, rules[name]);
+            valid = valid && rules[name];
+        });
+
+        submitButton.disabled = !valid;
+    }
+
+    ruleItems.forEach(function (item) {
+        item.classList.add("text-danger");
+    });
+
+    oldPassword.addEventListener("input", validatePassword);
+    newPassword.addEventListener("input", validatePassword);
+    repeatPassword.addEventListener("input", validatePassword);
+    form.addEventListener("submit", function (event) {
+        validatePassword();
+        if (submitButton.disabled) {
+            event.preventDefault();
+        }
+    });
+})();
 </script>
