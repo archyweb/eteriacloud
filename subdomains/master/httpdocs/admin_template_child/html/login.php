@@ -130,7 +130,6 @@ $loginMode = isset($login_mode) ? $login_mode : 'login';
                             <div class="col-auto">
                               <?php
                                 $loginTitles = [
-                                  'change_password' => 'Cambio password',
                                   'forgot_password' => 'Password dimenticata',
                                   'reset_password' => 'Reimposta password',
                                   'login' => 'Account Login'
@@ -139,46 +138,7 @@ $loginMode = isset($login_mode) ? $login_mode : 'login';
                               <h3><?php echo htmlspecialchars($loginTitles[$loginMode] ?? $loginTitles['login'], ENT_QUOTES, 'UTF-8'); ?></h3>
                             </div>
                           </div>
-                          <?php if ($loginMode === 'change_password'): ?>
-                            <form name="change-password-form" method="post" id="change-password-form">
-                              <input type="hidden" name="form_action" value="change_password">
-                              <div class="mb-3">
-                                <label class="form-label" for="change-email">Email</label>
-                                <input class="form-control" id="change-email" name="change_email" type="email" value="<?php echo htmlspecialchars($password_change_email ?? '', ENT_QUOTES, 'UTF-8'); ?>" required/>
-                              </div>
-                              <div class="mb-3">
-                                <label class="form-label" for="old-password">Password attuale</label>
-                                <input class="form-control" id="old-password" name="old_password" type="password" required/>
-                              </div>
-                              <div class="mb-3">
-                                <label class="form-label" for="new-password">Nuova password</label>
-                                <input class="form-control" id="new-password" name="new_password" type="password" autocomplete="new-password" required/>
-                              </div>
-                              <div class="mb-3">
-                                <label class="form-label" for="new-password-repeat">Ripeti nuova password</label>
-                                <input class="form-control" id="new-password-repeat" name="new_password_repeat" type="password" autocomplete="new-password" required/>
-                              </div>
-                              <ul class="list-unstyled fs-10 mb-3" id="password-rules">
-                                <li data-rule="length">Almeno 12 caratteri</li>
-                                <li data-rule="lowercase">Almeno una lettera minuscola</li>
-                                <li data-rule="uppercase">Almeno una lettera maiuscola</li>
-                                <li data-rule="number">Almeno un numero</li>
-                                <li data-rule="special">Almeno un carattere speciale</li>
-                                <li data-rule="spaces">Nessuno spazio</li>
-                                <li data-rule="different">Diversa dalla password attuale</li>
-                                <li data-rule="match">Le password coincidono</li>
-                              </ul>
-                              <div class="mb-3">
-                                <button class="btn btn-primary d-block w-100 mt-3" type="submit" id="change-password-btn" disabled>Cambia password</button>
-                                <?php if (!empty($password_change_message)): ?>
-                                  <div class="<?php echo !empty($password_change_success) ? 'alert alert-success' : 'error'; ?> mt-2" style="padding:6px;"><?php echo htmlspecialchars($password_change_message, ENT_QUOTES, 'UTF-8'); ?></div>
-                                <?php endif; ?>
-                              </div>
-                              <div class="text-center">
-                                <a class="fs-10" href="/archy/login.php">Torna al login</a>
-                              </div>
-                            </form>
-                          <?php elseif ($loginMode === 'forgot_password'): ?>
+                          <?php if ($loginMode === 'forgot_password'): ?>
                             <form name="forgot-password-form" method="post" id="forgot-password-form">
                               <input type="hidden" name="form_action" value="forgot_password">
                               <div class="mb-3">
@@ -270,8 +230,7 @@ $loginMode = isset($login_mode) ? $login_mode : 'login';
                                 <?php endif; ?>
                               </div>
                               <div class="text-center">
-                                <a class="fs-10 me-3" href="/archy/login.php?mode=change-password">Cambia password</a>
-                                <a class="fs-10" href="/archy/login.php?mode=forgot-password">Password dimenticata</a>
+                                <!--<a class="fs-10" href="/archy/login.php?mode=forgot-password">Password dimenticata</a>-->
                               </div>
                             </form>
                           <?php endif; ?>

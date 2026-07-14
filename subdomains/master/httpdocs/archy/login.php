@@ -3,10 +3,6 @@
     $subdomain_root = dirname(dirname(__FILE__));
     $child_template_root = $subdomain_root . '/admin_template_child';    
     $login_error_message = '';
-    $password_change_message = '';
-    $password_change_success = false;
-    $password_change_email = '';
-    $password_change_rules = [];
     $forgot_password_message = '';
     $forgot_password_success = false;
     $forgot_password_email = '';
@@ -14,7 +10,7 @@
     $reset_password_success = false;
     $reset_password_token = $_GET['token'] ?? '';
     $mode = str_replace('-', '_', $_GET['mode'] ?? 'login');
-    $allowed_modes = ['login', 'change_password', 'forgot_password', 'reset_password'];
+    $allowed_modes = ['login', 'forgot_password', 'reset_password'];
     $login_mode = in_array($mode, $allowed_modes, true) ? $mode : 'login';
     $options = require $main_root . '/private/_common/config.php';
     
@@ -31,19 +27,7 @@
         try {
             $app = new App($subdomain_root);
 
-            if ($form_action === 'change_password') {
-                $password_change_email = $_POST['change_email'] ?? '';
-                $change = $app->auth->changePasswordByEmailStrict(
-                    $password_change_email,
-                    $_POST['old_password'] ?? '',
-                    $_POST['new_password'] ?? '',
-                    $_POST['new_password_repeat'] ?? ''
-                );
-
-                $password_change_message = $change['message'];
-                $password_change_success = empty($change['error']);
-                $password_change_rules = $change['rules'] ?? [];
-            } elseif ($form_action === 'forgot_password') {
+            if ($form_action === 'forgot_password') {
                 $forgot_password_email = $_POST['forgot_email'] ?? '';
                 $mailer = $app->auth->config->mailerDriver;
 
@@ -76,9 +60,7 @@
                 }
             }
         } catch (Throwable $e) {
-            if ($login_mode === 'change_password') {
-                $password_change_message = $e->getMessage();
-            } elseif ($login_mode === 'forgot_password') {
+            if ($login_mode === 'forgot_password') {
                 $forgot_password_message = $e->getMessage();
             } elseif ($login_mode === 'reset_password') {
                 $reset_password_message = $e->getMessage();
