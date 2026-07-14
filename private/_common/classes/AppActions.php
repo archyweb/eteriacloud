@@ -795,7 +795,7 @@ class AppActions extends ExtraActions{
 	}
 	
 	public function ticket_user_reply(){
-		$support=new Support($_POST['thread_id']);
+		$support=new Support($_POST['thread_id'],'customer');
 		$support->user_reply();		
 	}
 	

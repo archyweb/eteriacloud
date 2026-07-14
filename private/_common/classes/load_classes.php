@@ -74,6 +74,7 @@ require_once $physical_path.'/StoreLocalAdapter.php';
 require_once $physical_path.'/StoreFileRepository.php';
 require_once $physical_path.'/Api.php';
 require_once $physical_path.'/StatsCloudStorageService.php';
+require_once $physical_path.'/CoreUpdate.php';
 require_once $physical_path.'/AdditionalFields.php';
 require_once $physical_path.'/ArchyCore/Schema/FieldSearchResolver.php';
 ?>

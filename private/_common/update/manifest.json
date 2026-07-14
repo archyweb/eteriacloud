@@ -1,0 +1,10 @@
+{
+  "version": "2026.07.13.1",
+  "requires": "2026.07.13.0",
+  "package": "packages/archyart-update-2026.07.13.1.zip",
+  "sha256": "",
+  "sql": "sql/archyart-update-2026.07.13.1.sql",
+  "sql_sha256": "",
+  "changelog": "Manifest iniziale per aggiornamenti automatici ArchyArt.",
+  "created_at": "2026-07-13"
+}

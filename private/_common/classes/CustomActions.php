@@ -10,7 +10,7 @@ class CustomActions extends AppActions{
 	
 	public function ticket_reply(){
 		
-		$support=new Support($_POST['thread_id']);
+		$support=new Support($_POST['thread_id'],'support');
 		$support->ticket_reply();		
 	}
 

@@ -1,201 +1,499 @@
 <?php
 
-class CoreUpdate{
-	
-	public $app, $db;
-		
-	public function __construct(){
-		global $app;
-		$this->db=$app->get_db();
-		$this->app=&$app;		
-	}
-	
-	public function coreCheckVersion($version=false) {
-            $filename = ABSPATH . "version.txt";
-            $handle = fopen($filename, "r");
-            $v = fread($handle, filesize($filename));
-            $mv_current = intval(substr($v, 0, 1));
-            $v_current = intval(substr($v, -1));
-            $v_next = $v_current + 1;
-            if($version){ $handle_w = fopen($filename, "w"); fwrite($handle_w, $mv_current . '.' .$v_next); }
-            fclose($handle);
-            return $v;
+class CoreUpdate
+{
+    protected $options = array();
+    protected $mainRoot;
+    protected $updateRoot;
+
+    public function __construct($options = array())
+    {
+        $this->options = is_array($options) ? $options : array();
+        $classesRoot = dirname(__FILE__);
+        $this->mainRoot = isset($this->options['main_root'])
+            ? $this->normalizePath($this->options['main_root'])
+            : realpath($classesRoot . '/../../..');
+        $this->updateRoot = $this->mainRoot . '/private/_common/update';
+    }
+
+    public function run($options = array())
+    {
+        $options = array_merge($this->options, is_array($options) ? $options : array());
+        $dryRun = $this->toBool(isset($options['dry_run']) ? $options['dry_run'] : true);
+
+        $manifestPath = isset($options['manifest']) ? $options['manifest'] : $this->updateRoot . '/manifest.json';
+        $customersPath = isset($options['customers']) ? $options['customers'] : $this->defaultCustomersPath();
+
+        $manifest = $this->loadManifest($manifestPath);
+        $sql = $this->loadSqlFromManifest($manifest, $manifestPath);
+        $customers = $this->loadCustomers($customersPath);
+
+        $results = array();
+        foreach ($customers as $customer) {
+            if (!$this->toBool(isset($customer['enabled']) ? $customer['enabled'] : true)) {
+                $results[] = array(
+                    'customer' => $customer['customer'],
+                    'status' => 'skipped',
+                    'message' => 'Cliente disabilitato.',
+                );
+                continue;
+            }
+
+            $results[] = $this->processCustomer($customer, $manifest, $sql, $dryRun);
         }
 
-        public function coreCheckUpdates($update=false) {
-            $v = $this->coreCheckVersion();
-            $v_current = intval(substr($v, -1));
-            $v_next = $v_current + 1;
-            $url = UPDATE_ABSPATH . "efa-update-3.".$v_next.".zip";
-            $ch = curl_init($url);
-            curl_setopt($ch, CURLOPT_RETURNTRANSFER, TRUE);
-            curl_setopt($ch, CURLOPT_FOLLOWLOCATION, TRUE);
-            curl_exec($ch);
-            if($update){ return $url; }
-            else{ return curl_getinfo($ch, CURLINFO_HTTP_CODE); }
-            curl_close($ch);
-        }
+        return array(
+            'status' => $this->hasFailures($results) ? 'partial' : 'success',
+            'dry_run' => $dryRun,
+            'manifest_version' => isset($manifest['version']) ? $manifest['version'] : null,
+            'customers_file' => $this->resolvePath($customersPath),
+            'summary' => $this->summary($results),
+            'results' => $results,
+        );
+    }
 
-        public function coreGetChangelog() {
-            $v = $this->coreCheckVersion();
-            $v_current = intval(substr($v, -1));
-            $v_next = $v_current + 1;
-            $url = UPDATE_ABSPATH . "efa-changelog-3.".$v_next.".txt";
-            $ch = curl_init();
-            $timeout = 5;
-            curl_setopt($ch, CURLOPT_URL, $url);
-            curl_setopt($ch, CURLOPT_RETURNTRANSFER, TRUE);
-            curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, $timeout);
-            $data = curl_exec($ch);
-            curl_close($ch);
-            return $data;
-        }
+    protected function processCustomer($customer, $manifest, $sql, $dryRun)
+    {
+        $mysqli = null;
 
-        public function coreUpdateDB() {
-            //$v = $this->coreCheckVersion();
-           // $v_current = intval(substr($v, -1));
-            //$v_next = $v_current + 1;
-            $backup = $this->coreBackupDb();
-            $dump = UPDATE_ABSPATH . "efa-update-3.".$v_current.".sql";
+        try {
+            $mysqli = $this->connectCustomer($customer);
 
-            $templine = '';
-            $lines = file($dump);
-            foreach ($lines as $line) {
-                if (substr($line, 0, 2) == '--' || $line == '')
-                    continue;
+            if ($dryRun) {
+                $mysqli->close();
+                return array(
+                    'customer' => $customer['customer'],
+                    'database' => $customer['db_name'],
+                    'status' => 'success',
+                    'message' => 'Connessione DB riuscita. Nessuna query eseguita per dry-run.',
+                );
+            }
 
-                $templine .= $line;
-                if (substr(trim($line), -1, 1) == ';') {
-                    $this->db->query($templine) or print('Error performing query \'<strong>' . $templine . '\': ' . $this->db->connect_errno . '<br /><br />');
-                    $templine = '';
+            $this->executeSql($mysqli, $sql);
+            $this->recordUpdate($mysqli, $manifest, 'success', false, 'Aggiornamento SQL eseguito correttamente.', array(
+                'customer' => $customer['customer'],
+                'database' => $customer['db_name'],
+            ));
+
+            $mysqli->close();
+            return array(
+                'customer' => $customer['customer'],
+                'database' => $customer['db_name'],
+                'status' => 'success',
+                'message' => 'Aggiornamento SQL eseguito correttamente.',
+            );
+        } catch (Exception $e) {
+            if ($mysqli instanceof mysqli) {
+                try {
+                    $this->recordUpdate($mysqli, $manifest, 'failed', $dryRun, $e->getMessage(), array(
+                        'customer' => $customer['customer'],
+                        'database' => isset($customer['db_name']) ? $customer['db_name'] : null,
+                    ));
+                    $mysqli->close();
+                } catch (Exception $ignored) {
                 }
             }
-            echo "<p>Aggiornamento avvenuto con successo! Reindirizzamento alla Dashboard in corso...</p>";
 
+            return array(
+                'customer' => isset($customer['customer']) ? $customer['customer'] : null,
+                'database' => isset($customer['db_name']) ? $customer['db_name'] : null,
+                'status' => 'failed',
+                'message' => $e->getMessage(),
+            );
+        }
+    }
+
+    protected function connectCustomer($customer)
+    {
+        foreach (array('customer', 'db_host', 'db_name', 'db_user') as $key) {
+            if (!isset($customer[$key]) || trim((string) $customer[$key]) === '') {
+                throw new RuntimeException('Configurazione cliente incompleta: campo mancante ' . $key . '.');
+            }
         }
 
-        public function coreDoSqlBackup(){
-            $this->initDB->coreBackupDb();
-        }
-        
-        public function coreBackupDb($tables = '*'){
-            $return = '';
-            $dir = ABSPATH."tmp_sql";
+        $port = isset($customer['db_port']) && $customer['db_port'] !== '' ? (int) $customer['db_port'] : 3306;
+        $mysqli = @new mysqli(
+            $customer['db_host'],
+            $customer['db_user'],
+            isset($customer['db_pass']) ? $customer['db_pass'] : '',
+            $customer['db_name'],
+            $port
+        );
 
-            if($tables == '*'){
-                    $tables = array();
-                    $result = $this->dbh->query('SHOW TABLES');
-                    while($row = $result->fetch_row()){
-                        $tables[] = $row[0];
-                    }
-            }else{
-                    $tables = is_array($tables) ? $tables : explode(',',$tables);
-            }
-
-            foreach($tables as $table){
-                    $result = $this->dbh->query('SELECT * FROM '.$table);
-                    $num_fields = $result->field_count;
-
-                    $return.= 'DROP TABLE '.$table.';';
-                    $result_2 = $this->dbh->query('SHOW CREATE TABLE '.$table);
-                    $row2 = $result_2->fetch_row();
-                    $return.= "\n\n".$row2[1].";\n\n";
-
-                    for ($i = 0; $i < $num_fields; $i++) {
-                            while($row = $result->fetch_row()){
-                                    $return.= 'INSERT INTO '.$table.' VALUES(';
-                                    for($j=0; $j<$num_fields; $j++) {
-                                            $row[$j] = addslashes($row[$j]);
-                                            $row[$j] = str_replace("\n","\\n",$row[$j]);
-                                            if (isset($row[$j])) { $return.= '"'.$row[$j].'"' ; } else { $return.= '""'; }
-                                            if ($j<($num_fields-1)) { $return.= ','; }
-                                    }
-                                    $return.= ");\n";
-                            }
-                    }
-                    $return.="\n\n\n";
-            }
-            if(!is_dir($dir)){ mkdir($dir, 0755 ); }
-
-            $handle = fopen($dir.'/db-backup-'.date("d-m-Y").'-'.(md5(implode(',',$tables))).'.sql','w+');
-            fwrite($handle,$return);
-            fclose($handle);
+        if ($mysqli->connect_errno) {
+            throw new RuntimeException('Connessione DB fallita: ' . $mysqli->connect_error);
         }
 
-        public function coreDoUpdate() {
-            $this->efa_doSqlBackup();
-            echo "<p>Salvataggio database attuale in corso...</p>";
+        $mysqli->set_charset('utf8mb4');
+        return $mysqli;
+    }
 
-            $url = $this->efa_checkUpdates(true);
+    protected function executeSql($mysqli, $sql)
+    {
+        if (trim($sql) === '') {
+            throw new RuntimeException('File SQL vuoto.');
+        }
 
-            $zipFile = ABSPATH . 'tmp/temp_update.zip';
-            $zipResource = fopen($zipFile, "w");
+        if (!$mysqli->multi_query($sql)) {
+            throw new RuntimeException('Errore SQL: ' . $mysqli->error);
+        }
 
-            $ch = curl_init();
-            curl_setopt($ch, CURLOPT_URL, $url);
-            curl_setopt($ch, CURLOPT_FAILONERROR, true);
-            curl_setopt($ch, CURLOPT_HEADER, 0);
-            //curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
-            curl_setopt($ch, CURLOPT_AUTOREFERER, true);
-            curl_setopt($ch, CURLOPT_BINARYTRANSFER, true);
-            curl_setopt($ch, CURLOPT_TIMEOUT, 10);
-            curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 0);
-            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, 0);
-            curl_setopt($ch, CURLOPT_FILE, $zipResource);
-            $page = curl_exec($ch);
-            if (!$page) {
-                echo "<p>Errore :- " . curl_error($ch) . "</p>";
-            }else{
-                echo "<p>Scarico il pacchetto aggiornamenti...</p>";
-                sleep(3);
-                $this->efa_extractZip($zipFile);
+        do {
+            $result = $mysqli->store_result();
+            if ($result) {
+                $result->free();
             }
+        } while ($mysqli->more_results() && $mysqli->next_result());
+
+        if ($mysqli->errno) {
+            throw new RuntimeException('Errore SQL: ' . $mysqli->error);
+        }
+    }
+
+    protected function recordUpdate($mysqli, $manifest, $status, $dryRun, $message, $details)
+    {
+        $version = isset($manifest['version']) ? $manifest['version'] : '';
+        if ($version === '') {
+            return;
+        }
+
+        $detailsJson = json_encode($details);
+        $values = array(
+            'version' => $version,
+            'requires_version' => isset($manifest['requires']) ? $manifest['requires'] : null,
+            'status' => $status,
+            'dry_run' => $dryRun ? 1 : 0,
+            'package_file' => isset($manifest['package']) ? $manifest['package'] : null,
+            'package_sha256' => isset($manifest['sha256']) ? $manifest['sha256'] : null,
+            'sql_file' => isset($manifest['sql']) ? $manifest['sql'] : null,
+            'sql_sha256' => isset($manifest['sql_sha256']) ? $manifest['sql_sha256'] : null,
+            'message' => $message,
+            'details' => $detailsJson,
+        );
+
+        $query = "
+            INSERT INTO `archy_core_updates`
+                (`version`, `requires_version`, `status`, `dry_run`, `package_file`, `package_sha256`, `sql_file`, `sql_sha256`, `started_at`, `finished_at`, `message`, `details`, `created_at`)
+            VALUES
+                (" . $this->sqlValue($mysqli, $values['version']) . ",
+                 " . $this->sqlValue($mysqli, $values['requires_version']) . ",
+                 " . $this->sqlValue($mysqli, $values['status']) . ",
+                 " . (int) $values['dry_run'] . ",
+                 " . $this->sqlValue($mysqli, $values['package_file']) . ",
+                 " . $this->sqlValue($mysqli, $values['package_sha256']) . ",
+                 " . $this->sqlValue($mysqli, $values['sql_file']) . ",
+                 " . $this->sqlValue($mysqli, $values['sql_sha256']) . ",
+                 NOW(),
+                 NOW(),
+                 " . $this->sqlValue($mysqli, $values['message']) . ",
+                 " . $this->sqlValue($mysqli, $values['details']) . ",
+                 NOW())
+            ON DUPLICATE KEY UPDATE
+                `requires_version` = VALUES(`requires_version`),
+                `status` = VALUES(`status`),
+                `dry_run` = VALUES(`dry_run`),
+                `package_file` = VALUES(`package_file`),
+                `package_sha256` = VALUES(`package_sha256`),
+                `sql_file` = VALUES(`sql_file`),
+                `sql_sha256` = VALUES(`sql_sha256`),
+                `finished_at` = VALUES(`finished_at`),
+                `message` = VALUES(`message`),
+                `details` = VALUES(`details`)
+        ";
+
+        if (!$mysqli->query($query)) {
+            throw new RuntimeException('Impossibile registrare aggiornamento: ' . $mysqli->error);
+        }
+    }
+
+    protected function loadManifest($path)
+    {
+        $content = $this->readPathOrUrl($path);
+        $manifest = json_decode($content, true);
+
+        if (!is_array($manifest)) {
+            throw new RuntimeException('Manifest non valido.');
+        }
+
+        foreach (array('version', 'sql') as $key) {
+            if (!isset($manifest[$key]) || trim((string) $manifest[$key]) === '') {
+                throw new RuntimeException('Manifest incompleto: campo mancante ' . $key . '.');
+            }
+        }
+
+        return $manifest;
+    }
+
+    protected function loadSqlFromManifest($manifest, $manifestPath)
+    {
+        $sqlPath = $manifest['sql'];
+        if (!$this->isUrl($sqlPath)) {
+            if ($this->isUrl($manifestPath)) {
+                $sqlPath = rtrim(dirname($manifestPath), '/\\') . '/' . ltrim($sqlPath, '/\\');
+            } else {
+                $manifestFile = $this->resolvePath($manifestPath);
+                $sqlPath = dirname($manifestFile) . '/' . $sqlPath;
+            }
+        }
+
+        $sql = $this->readPathOrUrl($sqlPath);
+
+        if (isset($manifest['sql_sha256']) && trim((string) $manifest['sql_sha256']) !== '') {
+            $hash = hash('sha256', $sql);
+            if (!hash_equals(strtolower($manifest['sql_sha256']), strtolower($hash))) {
+                throw new RuntimeException('Hash SHA256 del file SQL non valido.');
+            }
+        }
+
+        return $sql;
+    }
+
+    protected function loadCustomers($path)
+    {
+        $path = $this->resolvePath($path);
+        if (!is_file($path)) {
+            throw new RuntimeException('File clienti non trovato: ' . $path);
+        }
+
+        $extension = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+        if (in_array($extension, array('xlsx', 'xls'))) {
+            return $this->loadCustomersFromExcel($path);
+        }
+
+        return $this->loadCustomersFromCsv($path);
+    }
+
+    protected function loadCustomersFromExcel($path)
+    {
+        if (!class_exists('\\PhpOffice\\PhpSpreadsheet\\IOFactory')) {
+            throw new RuntimeException('PhpSpreadsheet non disponibile.');
+        }
+
+        $spreadsheet = \PhpOffice\PhpSpreadsheet\IOFactory::load($path);
+        $rows = $spreadsheet->getActiveSheet()->toArray(null, true, true, false);
+
+        return $this->normalizeCustomerRows($rows);
+    }
+
+    protected function loadCustomersFromCsv($path)
+    {
+        $handle = fopen($path, 'r');
+        if (!$handle) {
+            throw new RuntimeException('Impossibile leggere il file clienti.');
+        }
+
+        $rows = array();
+        while (($row = fgetcsv($handle, 0, ';')) !== false) {
+            if (count($row) === 1 && strpos($row[0], ',') !== false) {
+                $row = str_getcsv($row[0], ',');
+            }
+            $rows[] = $row;
+        }
+        fclose($handle);
+
+        return $this->normalizeCustomerRows($rows);
+    }
+
+    protected function normalizeCustomerRows($rows)
+    {
+        if (!is_array($rows) || count($rows) < 2) {
+            throw new RuntimeException('File clienti vuoto o senza righe dati.');
+        }
+
+        $headers = array_shift($rows);
+        $map = $this->headerMap($headers);
+        $customers = array();
+
+        foreach ($rows as $row) {
+            if ($this->isEmptyRow($row)) {
+                continue;
+            }
+
+            $customer = array(
+                'customer' => $this->valueByKey($row, $map, 'customer'),
+                'db_host' => $this->valueByKey($row, $map, 'db_host'),
+                'db_port' => $this->valueByKey($row, $map, 'db_port'),
+                'db_name' => $this->valueByKey($row, $map, 'db_name'),
+                'db_user' => $this->valueByKey($row, $map, 'db_user'),
+                'db_pass' => $this->valueByKey($row, $map, 'db_pass'),
+                'enabled' => $this->valueByKey($row, $map, 'enabled'),
+            );
+
+            if ($customer['enabled'] === '') {
+                $customer['enabled'] = '1';
+            }
+
+            $customers[] = $customer;
+        }
+
+        if (!$customers) {
+            throw new RuntimeException('Nessun cliente valido nel file clienti.');
+        }
+
+        return $customers;
+    }
+
+    protected function headerMap($headers)
+    {
+        $aliases = array(
+            'customer' => array('customer', 'cliente', 'name', 'nome', 'site', 'sito', 'ragione_sociale'),
+            'db_host' => array('db_host', 'host', 'database_host', 'mysql_host', 'server'),
+            'db_port' => array('db_port', 'port', 'porta'),
+            'db_name' => array('db_name', 'database', 'database_name', 'nome_database', 'db', 'dbname'),
+            'db_user' => array('db_user', 'user', 'username', 'utente', 'db_username'),
+            'db_pass' => array('db_pass', 'pass', 'password', 'db_password'),
+            'enabled' => array('enabled', 'active', 'attivo', 'abilitato', 'abilita'),
+        );
+
+        $map = array();
+        foreach ($headers as $index => $header) {
+            $normalized = $this->normalizeHeader($header);
+            foreach ($aliases as $target => $names) {
+                if (in_array($normalized, $names, true)) {
+                    $map[$target] = $index;
+                }
+            }
+        }
+
+        return $map;
+    }
+
+    protected function valueByKey($row, $map, $key)
+    {
+        if (!isset($map[$key]) || !array_key_exists($map[$key], $row)) {
+            return '';
+        }
+
+        return trim((string) $row[$map[$key]]);
+    }
+
+    protected function isEmptyRow($row)
+    {
+        foreach ($row as $value) {
+            if (trim((string) $value) !== '') {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    protected function normalizeHeader($value)
+    {
+        $value = strtolower(trim((string) $value));
+        $value = preg_replace('/[^a-z0-9]+/', '_', $value);
+        return trim($value, '_');
+    }
+
+    protected function readPathOrUrl($path)
+    {
+        if ($this->isUrl($path)) {
+            $ch = curl_init($path);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+            curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 10);
+            curl_setopt($ch, CURLOPT_TIMEOUT, 60);
+            $content = curl_exec($ch);
+            $error = curl_error($ch);
+            $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
             curl_close($ch);
+
+            if ($content === false || $code >= 400) {
+                throw new RuntimeException('Impossibile leggere URL ' . $path . ': ' . ($error ? $error : 'HTTP ' . $code));
+            }
+
+            return $content;
         }
 
-        public function coreExtractZip($zipFile) {
-            $zip_folder = array();
-            $zip = new ZipArchive;
-            $zip = zip_open($zipFile);
+        $path = $this->resolvePath($path);
+        if (!is_file($path)) {
+            throw new RuntimeException('File non trovato: ' . $path);
+        }
 
-            if ($zip) {
-                echo "<p>Controllo le cartelle modificate...</p>";
-                while ($zip_entry = zip_read($zip)) {
-                    if(zip_entry_filesize($zip_entry)==0){
-                        array_push($zip_folder, zip_entry_name($zip_entry));
-                    }
-                }
-                zip_close($zip);
-                foreach ($zip_folder as $value) {
-                    delete_dir(ABSPATH . $value);
-                }
-                $this->efa_copyZipToCore($zipFile);
-            }else{
-                echo "<p>Errore :- Impossibile aprire il file zip</p>";
+        $content = file_get_contents($path);
+        if ($content === false) {
+            throw new RuntimeException('Impossibile leggere file: ' . $path);
+        }
+
+        return $content;
+    }
+
+    protected function resolvePath($path)
+    {
+        if ($this->isUrl($path)) {
+            return $path;
+        }
+
+        $path = str_replace('\\', '/', $path);
+        if (preg_match('/^[a-zA-Z]:\//', $path) || strpos($path, '/') === 0) {
+            return $path;
+        }
+
+        return $this->mainRoot . '/' . ltrim($path, '/');
+    }
+
+    protected function normalizePath($path)
+    {
+        $real = realpath($path);
+        return $real ? str_replace('\\', '/', $real) : str_replace('\\', '/', $path);
+    }
+
+    protected function defaultCustomersPath()
+    {
+        $xlsx = $this->updateRoot . '/customers.xlsx';
+        if (is_file($xlsx)) {
+            return $xlsx;
+        }
+
+        return $this->updateRoot . '/customers.csv';
+    }
+
+    protected function isUrl($value)
+    {
+        return (bool) preg_match('/^https?:\/\//i', (string) $value);
+    }
+
+    protected function toBool($value)
+    {
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        $value = strtolower(trim((string) $value));
+        return !in_array($value, array('', '0', 'false', 'no', 'off'), true);
+    }
+
+    protected function sqlValue($mysqli, $value)
+    {
+        if ($value === null || $value === '') {
+            return 'NULL';
+        }
+
+        return "'" . $mysqli->real_escape_string((string) $value) . "'";
+    }
+
+    protected function hasFailures($results)
+    {
+        foreach ($results as $result) {
+            if (isset($result['status']) && $result['status'] === 'failed') {
+                return true;
             }
         }
 
-        public function coreCopyZipToCore($zipFile) {
-            $zip = new ZipArchive;
-            if($zip->open($zipFile) != "true"){
-                echo "<p>Errore :- Impossibile aprire il file zip</p>";
-            }else{
-                echo "<p>Inizio la copia dei nuovi file...</p>";
-                $zip->extractTo(ABSPATH);
+        return false;
+    }
+
+    protected function summary($results)
+    {
+        $summary = array('success' => 0, 'failed' => 0, 'skipped' => 0);
+        foreach ($results as $result) {
+            $status = isset($result['status']) ? $result['status'] : 'failed';
+            if (!isset($summary[$status])) {
+                $summary[$status] = 0;
             }
-            $zip->close();
-            $this->efa_deleteZip($zipFile);
-            $this->efa_updateDB();
+            $summary[$status]++;
         }
 
-        public function coreDeleteZip($zipFile) {
-            echo "<p>Cancello lo zip...</p>";
-            unlink($zipFile);
-            $this->efa_checkVersion(true);
-            unset($_SESSION['update']);
-        }
-
-	
+        return $summary;
+    }
 }
-
-?>
