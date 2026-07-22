@@ -344,12 +344,6 @@ if (
         
     public function login($username, $password) {
         $res = $this->auth->login($username, $password);
-        if($res['error']) {
-             //error_log("@@@@@@@@@@@@@ login : ".print_r($res,true));
-            // do nothing
-        } else {
-            setcookie($this->auth->config->cookie_name, $res['hash'], $res['expire'], $this->auth->config->cookie_path, $this->auth->config->cookie_domain, $this->auth->config->cookie_secure, $this->auth->config->cookie_http);  
-        }
         return $res;
     }
 
@@ -367,10 +361,31 @@ if (
 	    $newPassword = $_POST['new_password'];
 	    $newPasswordRepeat = $_POST['new_password_repeat'];
         $curUser = $this->auth->getCurrentUser();
+        $referer = $_SERVER['HTTP_REFERER'] ?? '/';
+
+        if (!$curUser || !isset($curUser['uid'])) {
+            set_message("error", "Sessione non valida. Effettua nuovamente il login.");
+            header('location: '.$referer);
+            return;
+        }
+
+        if ($newPassword !== $newPasswordRepeat) {
+            set_message("error", "Le nuove password non coincidono.");
+            header('location: '.$referer);
+            return;
+        }
+
+        $validation = $this->auth->validateStrictPassword($newPassword, $curUser['email'] ?? '', $oldPassword);
+
+        if (!$validation['valid']) {
+            set_message("error", $validation['message']);
+            header('location: '.$referer);
+            return;
+        }
 
 	    $resp = $this->auth->changePassword($curUser['uid'], $oldPassword, $newPassword, $newPasswordRepeat, $captcha_response = null);
         set_message($resp['error'] ? "error" : "success", $resp['message']);
-        header('location: '.$_SERVER['HTTP_REFERER']);
+        header('location: '.$referer);
     }
 
     public function creaCard() {
@@ -774,10 +789,7 @@ if (
 		return $return;
 	}
 	
-	
-
-	
-    private static function normalize_form_wrapper($wrapper){
+	private static function normalize_form_wrapper($wrapper){
         if($wrapper === NULL || trim((string)$wrapper) === ''){
             return 'col-12 col-md-6 col-lg-4';
         }
@@ -836,6 +848,7 @@ if (
         return trim(implode(' ', array_unique(array_merge($grid_classes, $extra_classes))));
     }
 
+	
 	public static function form_element($column,$wrapper=NULL,$name_prefix=NULL,$name_suffix=NULL,$id_suffix=NULL,$set_value=NULL){
 		global $app;
 		$name=str_replace($app->intent->table.'.','',$column['alias']);
@@ -898,10 +911,13 @@ if (
                 
                 // rewrite textarea (plain_editor) + placeholder cols
                 if($column['type']=='plain_editor' && (isset($column['placeholder'])&&$column['placeholder']==true)){ $wrapper = 'col-8'; }
-                if(isset($column['wrapper_column']) && $column['wrapper_column']!=''){ $wrapper=$column['wrapper_column']; }
+                /*if(isset($column['wrapper_column']) && $column['wrapper_column']!=''){ $wrapper=$column['wrapper_column']; }
+		$response=$wrapper==NULL?'<div class="col-xs-12 col-lg-3 col-md-4 col-sm-4">':'<div class="'.$wrapper.'">';*/
+                      
+				if(isset($column['wrapper_column']) && $column['wrapper_column']!=''){ $wrapper=$column['wrapper_column']; }
                 $wrapper = self::normalize_form_wrapper($wrapper);
 		$response='<div class="'.$wrapper.'">';
-                                
+					  
 			switch($column['type']):
                                 case 'hidden':
 					$form_value = form_value($column['value']);
@@ -1569,20 +1585,38 @@ break;
         }
 	
 	public function get_lookup_text(){
-		global $app;
-		include $this->main_root.'/private/_common/intents/'.$_POST['table'].'.php';
-		$app->init();
-		$q="select ".$_POST['lookup']." from ".$_POST['table'];		
-		if(count($app->intent->joins)):
-			foreach($app->intent->joins as $join_table=>$on):
-				$q.=" left join ".$join_table." on (".$on.")";
-			endforeach;
-		endif;
-		$q.=" where ".$app->actions_column."=".$_POST['id'];
-                //if(isset($_POST['lookup_filter'])){ $q.=" and ".$_POST['lookup_filter']; }
-		$search_label=(array)mysqli_fetch_object($this->db->query($q));
-		echo join(' ',$search_label);
-	}
+    global $app;
+
+    // FIX MIRATO MODELLI PDF
+    if(isset($_POST['table']) && $_POST['table'] == 'archy_models'){
+        $id = (int)$_POST['id'];
+        $lookup = $_POST['lookup'];
+
+        $q = "select ".$lookup." from archy_models where id=".$id." limit 1";
+        $search_label = (array) mysqli_fetch_object($this->db->query($q));
+
+        echo trim(join(' ', $search_label));
+        return;
+    }
+
+    include $this->main_root.'/private/_common/intents/'.$_POST['table'].'.php';
+
+    $app->init();
+
+    $q="select ".$_POST['lookup']." from ".$_POST['table'];
+
+    if(count($app->intent->joins)):
+        foreach($app->intent->joins as $join_table=>$on):
+            $q.=" left join ".$join_table." on (".$on.")";
+        endforeach;
+    endif;
+
+    $q.=" where ".$app->actions_column."=".$_POST['id'];
+
+    $search_label=(array)mysqli_fetch_object($this->db->query($q));
+
+    echo join(' ',$search_label);
+}
 	
 		/*
 |--------------------------------------------------------------------------
@@ -2568,29 +2602,35 @@ public function additional_fields($where)
 		*/
 		$export_upload_url = function($value) {
 			$value = trim((string)$value);
+
 			if ($value === '') {
 				return '';
 			}
 
-			// Se è già un URL assoluto, lo lascio invariato.
+			$decoded = json_decode($value, true);
+
+			if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+				$value = reset($decoded);
+				$value = trim((string)$value);
+			}
+
+			$value = trim($value, '[]"');
+
+			if ($value === '') {
+				return '';
+			}
+
 			if (preg_match('#^https?://#i', $value)) {
 				return $value;
 			}
 
 			$filename = basename($value);
+
 			if ($filename === '') {
 				return '';
 			}
 
-			$scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'https';
-			$host = isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : '';
-			$base = '/assets/documents/upload_extrafield/';
-
-			if ($host !== '') {
-				return $scheme.'://'.$host.$base.rawurlencode($filename);
-			}
-
-			return $base.rawurlencode($filename);
+			return 'https://demo-storage.archyart.it/uploads/' . rawurlencode($filename);
 		};
 
 		// Normalizza i nomi delle colonne additional.
@@ -2841,114 +2881,186 @@ public function additional_fields($where)
 		$app->$format($data,$filename=$app->intent->title,$columns_labels,$columns_data);
 	}
 
-        public function excel(&$data, $filename, &$columns_labels, &$columns_data) {
+public function excel(&$data, $filename, &$columns_labels, &$columns_data) {
 
-            $job_id = uniqid();
+    $job_id = uniqid();
 
-            $basePath = $this->subdomain_root . "/tmp/";
-            $filePath = $basePath . "export_$job_id.xlsx";
-            $jsonPath = $basePath . "$job_id.json";
+    $basePath = $this->subdomain_root . "/tmp/";
+    $filePath = $basePath . "export_$job_id.xlsx";
+    $jsonPath = $basePath . "$job_id.json";
 
-            // stato iniziale
+    file_put_contents($jsonPath, json_encode([
+        'progress' => 0,
+        'ready' => false,
+        'file' => $filePath
+    ]));
+
+    $spreadsheet = new Spreadsheet();
+    $sheet = $spreadsheet->getActiveSheet();
+
+    $sheet->freezePane('A2');
+
+    $excel_column = 'A';
+    foreach ($columns_labels as $column_title) {
+        $sheet->setCellValue($excel_column.'1', $column_title);
+        $sheet->getColumnDimension($excel_column)->setAutoSize(true);
+        $excel_column++;
+    }
+
+    $rowCount = 2;
+    $total = mysqli_num_rows($data);
+    $i = 0;
+
+    while ($row = mysqli_fetch_row($data)) {
+
+        $excel_column = 'A';
+
+        foreach ($row as $index => $cell) {
+
+            $cellAddress = $excel_column . $rowCount;
+
+            $is_upload_column = (
+                isset($columns_data[$index]['type']) &&
+                in_array($columns_data[$index]['type'], ['file', 'bulk_upload'])
+            );
+
+            if ($is_upload_column) {
+
+                $raw = trim((string)$cell);
+
+                if ($raw === '' || $raw === '[]' || $raw === '{}' || strtolower($raw) === 'null') {
+                    $sheet->setCellValue($cellAddress, '');
+                    $excel_column++;
+                    continue;
+                }
+
+                $decoded = json_decode($raw, true);
+
+                if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                    $items = $decoded;
+                } elseif ($this->is_serialized($raw)) {
+                    $items = unserialize($raw);
+                } else {
+                    $raw = str_replace(['<br />', '<br/>', '<br>'], "\n", $raw);
+                    $raw = trim($raw, '[]"');
+                    $items = preg_split('/\r\n|\r|\n|","|",\s*"/', $raw);
+                }
+
+                if (!is_array($items)) {
+                    $items = [$items];
+                }
+
+                $links = [];
+
+                foreach ($items as $item) {
+                    $item = trim((string)$item);
+                    $item = trim($item, '[]"');
+
+                    if ($item === '' || $item === '[]' || $item === '{}' || strtolower($item) === 'null') {
+                        continue;
+                    }
+					
+					if (preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $item)) {
+
+					$StoreCloud = new StoreCloud();
+					$file_location = $StoreCloud->getImageDetailFromDb($item, 'file_location');
+
+					if ($file_location == 'cloudImages') {
+						$links[] = $StoreCloud->getImageUrl($item, 'public');
+						continue;
+					}
+
+					$StoreR2Adapter = new StoreR2Adapter();
+					$links[] = $StoreR2Adapter->getFileUrl($item);
+					continue;
+				}
+
+
+
+                    if (preg_match('#^https?://#i', $item)) {
+                        $links[] = $item;
+                    } else {
+                        $basename = basename($item);
+
+                        if ($basename !== '' && $basename !== '.' && $basename !== '/') {
+                            $links[] = 'https://demo-storage.archyart.it/uploads/' . $basename;
+                        }
+                    }
+                }
+
+                $sheet->setCellValue($cellAddress, implode("\n", array_unique($links)));
+                $sheet->getStyle($cellAddress)->getAlignment()->setWrapText(true);
+
+                $excel_column++;
+                continue;
+            }
+
+            if (isset($columns_data[$index]['excel_formatter'])) {
+                $cell = $columns_data[$index]['excel_formatter']($cell, '');
+            } elseif (isset($columns_data[$index]['formatter']) && !isset($columns_data[$index]['formatter_hide_in_excel'])) {
+                $cell = $columns_data[$index]['formatter']($cell, '');
+            }
+
+            if (
+                isset($columns_data[$index]['type']) &&
+                ($columns_data[$index]['type'] == 'amount' || $columns_data[$index]['type'] == 'text')
+            ) {
+
+                if (strpos((string)$cell, "€") === false) {
+                    $sheet->setCellValue($cellAddress, $cell);
+                } else {
+                    $cell = substr($cell, 4);
+                    $cell = str_replace(".", "", $cell);
+                    $cell = str_replace(",", ".", $cell);
+
+                    $sheet->setCellValue($cellAddress, (float)$cell);
+
+                    $sheet->getStyle($cellAddress)
+                        ->getNumberFormat()
+                        ->setFormatCode('€ #,##0.00;[Red]-€ #,##0.00');
+                }
+
+            } else {
+
+    if (is_string($cell)) {
+
+        $cell = preg_replace('/<\/p>\s*<p>/i', "\n", $cell);
+        $cell = preg_replace('/<br\s*\/?>/i', "\n", $cell);
+        $cell = strip_tags($cell);
+        $cell = html_entity_decode($cell, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+    }
+
+    $sheet->setCellValue($cellAddress, $cell);
+}
+
+            $excel_column++;
+        }
+
+        $rowCount++;
+        $i++;
+
+        if ($i % 10 == 0 || $i == $total) {
             file_put_contents($jsonPath, json_encode([
-                'progress' => 0,
+                'progress' => $total > 0 ? intval(($i / $total) * 100) : 100,
                 'ready' => false,
                 'file' => $filePath
             ]));
-
-            $spreadsheet = new Spreadsheet();
-            $sheet = $spreadsheet->getActiveSheet();
-
-            $sheet->freezePane('A2');
-
-            // HEADER
-            $excel_column = 'A';
-            foreach ($columns_labels as $column_title) {
-                $sheet->setCellValue($excel_column.'1', $column_title);
-                $sheet->getColumnDimension($excel_column)->setAutoSize(true);
-                $excel_column++;
-            }
-
-            // DATI
-            $rowCount = 2;
-            $total = mysqli_num_rows($data); // 🔥 fondamentale
-            $i = 0;
-
-            while ($row = mysqli_fetch_row($data)) {
-
-                $excel_column = 'A';
-
-                foreach ($row as $index => $cell) {
-                    
-                    // 🔹 FORMATTER (come prima)
-                    if (isset($columns_data[$index]['excel_formatter'])) {
-                        $cell = $columns_data[$index]['excel_formatter']($cell, '');
-                    } elseif (isset($columns_data[$index]['formatter']) && !isset($columns_data[$index]['formatter_hide_in_excel'])) {
-                        $cell = $columns_data[$index]['formatter']($cell, '');
-                    }
-                    
-                    $cellAddress = $excel_column . $rowCount;
-
-                    // 🔹 GESTIONE TIPI
-                    if ($columns_data[$index]['type'] == 'amount' || $columns_data[$index]['type'] == 'text') {
-
-                        // controlla presenza €
-                        if (strpos((string)$cell, "€") === false) {
-
-                            $sheet->setCellValue($cellAddress, $cell);
-
-                        } else {
-
-                            // 🔥 pulizia valore
-                            $cell = substr($cell, 4);
-                            $cell = str_replace(".", "", $cell);
-                            $cell = str_replace(",", ".", $cell);
-
-                            $sheet->setCellValue($cellAddress, (float)$cell);
-
-                            // 🔥 formato valuta
-                            $sheet->getStyle($cellAddress)
-                                ->getNumberFormat()
-                                ->setFormatCode('€ #,##0.00;[Red]-€ #,##0.00');
-                        }
-
-                    } else {
-
-                        $sheet->setCellValue($cellAddress, $cell);
-                    }
-
-                    $excel_column++;
-                }
-
-                $rowCount++;
-                $i++;
-
-                // 🔥 aggiorna progress
-                if ($i % 10 == 0 || $i == $total) {
-                    file_put_contents($jsonPath, json_encode([
-                        'progress' => intval(($i / $total) * 100),
-                        'ready' => false,
-                        'file' => $filePath
-                    ]));
-                }
-            }
-
-            // salva file (NON output!)
-            $writer = new Xlsx($spreadsheet);
-            $writer->save($filePath);
-
-            // stato finale
-            file_put_contents($jsonPath, json_encode([
-                'progress' => 100,
-                'ready' => true,
-                'file' => $filePath
-            ]));
-
-            // 🔥 risposta JSON
-            header('Content-Type: application/json');
-            echo json_encode(['job_id' => $job_id]);
-            exit;
         }
+    }
+
+    $writer = new Xlsx($spreadsheet);
+    $writer->save($filePath);
+
+    file_put_contents($jsonPath, json_encode([
+        'progress' => 100,
+        'ready' => true,
+        'file' => $filePath
+    ]));
+
+    header('Content-Type: application/json');
+    echo json_encode(['job_id' => $job_id]);
+    exit;
+}
 
         public function export_status() {
 
@@ -3727,8 +3839,9 @@ public function additional_fields($where)
                 };
 
                 $links = [];
+					$attachment_counter = 1;
 
-                foreach($items as $item):
+					foreach($items as $item):
 
                     $item = trim((string)$item);
 
@@ -3772,9 +3885,9 @@ public function additional_fields($where)
                     $cloud = $resolve_cloud_item($item);
 
                     if($cloud && !empty($cloud['href'])):
-                        $links[] = '<a href="'.htmlspecialchars($cloud['href'], ENT_QUOTES, 'UTF-8').'" target="_blank">'.htmlspecialchars($cloud['label'], ENT_QUOTES, 'UTF-8').'</a>';
-                        continue;
-                    endif;
+						$links[] = '<a href="'.htmlspecialchars($cloud['href'], ENT_QUOTES, 'UTF-8').'" target="_blank">Apri allegato '.$attachment_counter++.'</a>';
+						continue;
+					endif;
 
                     /*
                     | 2. Path / URL reale.
@@ -3793,19 +3906,23 @@ public function additional_fields($where)
                     $label = $label != '' ? $label : $item;
 
                     if($is_absolute_url($href) || strpos($item, '/') === 0):
-                        $links[] = '<a href="'.htmlspecialchars($href, ENT_QUOTES, 'UTF-8').'" target="_blank">'.htmlspecialchars($label, ENT_QUOTES, 'UTF-8').'</a>';
-                    else:
-                        /*
-                        | 3. Valore non risolto.
-                        | Se è un UUID senza StoreCloud disponibile, evitiamo di stampare
-                        | il JSON grezzo e mostriamo una dicitura pulita.
-                        */
-                        if($is_uuid($item)):
-                            $links[] = 'Allegato cloud';
-                        else:
-                            $links[] = $escape_pdf_cell($label);
-                        endif;
-                    endif;
+
+						$links[] = '<a href="'.htmlspecialchars($href, ENT_QUOTES, 'UTF-8').'" target="_blank">Apri allegato '.$attachment_counter++.'</a>';
+						continue;
+
+					endif;
+
+					if($is_uuid($item)):
+
+						$links[] = 'Allegato cloud';
+						continue;
+
+					endif;
+
+					$storage_url = 'https://demo-storage.archyart.it/uploads/' . rawurlencode(basename($item));
+
+					$links[] = '<a href="'.htmlspecialchars($storage_url, ENT_QUOTES, 'UTF-8').'" target="_blank">Apri allegato '.$attachment_counter++.'</a>';
+					continue;
 
                 endforeach;
 
@@ -4120,11 +4237,24 @@ public function additional_fields($where)
                     | - altri campi: formatter standard se previsto.
                     |
                     */
-                    if($is_pdf_photo_column($column_label, $column_data)):
-                        $pdf.='<td align="center">'.$render_pdf_thumbnail($cell).'</td>';
-                    elseif(isset($column_data['type']) && in_array($column_data['type'], ['file','bulk_upload'])):
-                        $pdf.='<td>'.$render_pdf_upload_links($cell).'</td>';
-                    else:
+						$is_documentation_column = (
+						stripos((string)$column_label, 'documentazione') !== false ||
+						(
+							isset($column_data['label']) &&
+							stripos((string)$column_data['label'], 'documentazione') !== false
+						)
+					);
+
+					if($is_documentation_column):
+						$pdf.='<td>'.$render_pdf_upload_links($cell).'</td>';
+					elseif($is_pdf_photo_column($column_label, $column_data)):
+						$pdf.='<td align="center">'.$render_pdf_thumbnail($cell).'</td>';
+					elseif(
+						isset($column_data['type']) &&
+						in_array($column_data['type'], ['file','bulk_upload'])
+					):
+						$pdf.='<td>'.$render_pdf_upload_links($cell).'</td>';
+					else:
                         if(isset($columns_data[$index]['pdf_formatter'])):
                             $cell=$columns_data[$index]['pdf_formatter']($cell,'');
                         elseif(isset($columns_data[$index]['formatter']) and !isset($columns_data[$index]['formatter_hide_in_pdf'])):
@@ -4371,7 +4501,7 @@ public function additional_fields($where)
                 }
                 if($file_location=='local' || $file_location=='cloudImages'){
                     $back_img = '
-                    <div class="card card-grid overflow-hidden" style="max-width: 5rem;"">
+                    <div class="card card-grid overflow-hidden" style="width:5rem;max-width:5rem;">
                         <div class="card-img-top"><img style="width:100%;" src="' . $url_thumb_img . '" alt=""/></div>
                         <div class="card-body">
                             <a class="card-link" href="' . $url_img . '" target="_blank" data-bs-toggle="tooltip" data-bs-placement="top" title="Visualizza"><span class="far fa-eye"></span></a>';
