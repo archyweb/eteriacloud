@@ -1,4 +1,5 @@
 <?php
+/* ARCHY DATATABLE DOWNLOAD FIX VERSION: 2026-07-22-1625 */
 // Visulizza GRIGLIA RECORD
 $columns=$app->set_listing_columns();
 
@@ -39,7 +40,7 @@ endif;
 							<div class="btn-group me-2 mb-2" role="group">               
 							   <?php if(@$_GET['body_class']!='modal_grid'):?>
 								  <a class="btn btn-info export" data-format="excel" data-toggle="tooltip" data-placement="bottom" title="Esporta in Excel" href="javascript:void(0)"><span class="far fa-file-excel"></span> Excel</a>
-								  <a class="btn btn-info export" data-format="pdf" data-toggle="tooltip" data-placement="bottom" title="Esporta in PDF" href="javascript:void(0)"><span class="far fa-file-pdf"></span> PDF</a>
+								  <a class="btn btn-info" id="datatable_pdf_job" data-format="pdf" data-toggle="tooltip" data-placement="bottom" title="Esporta in PDF" href="javascript:void(0)"><span class="far fa-file-pdf"></span> PDF</a>
 								  <a class="btn btn-info" href="#" id="pdf_options" data-bs-toggle="modal" title="Opzioni PDF" data-placement="bottom" data-bs-target="#pdfOptions"
 										 data-orientation="P" data-sheet="A4" data-size="12" data-up="50" data-down="70" data-left="50" data-right="50"
 								  ><span class="fas fa-cogs"></span></a>
@@ -421,6 +422,172 @@ document.addEventListener('DOMContentLoaded', function () {
 
         });
     }
+
+
+
+/*
+|--------------------------------------------------------------------------
+| EXPORT PDF DATATABLE - JOB A BATCH
+|--------------------------------------------------------------------------
+*/
+const datatablePdfButton = document.getElementById('datatable_pdf_job');
+let datatablePdfRunning = false;
+
+function collectDatatablePdfParams(){
+    const table = jQuery('#grid_table').DataTable();
+    const columns = [];
+
+    jQuery('#grid_table thead th[data-column]').each(function(){
+        const column = jQuery(this).attr('data-column');
+        if(column){ columns.push(column); }
+    });
+
+    const orderInfo = table.order();
+    let orderBy = columns.length ? columns[0] : '';
+    let order = 'ASC';
+    if(orderInfo && orderInfo.length){
+        const index = parseInt(orderInfo[0][0], 10);
+        if(columns[index]){ orderBy = columns[index]; }
+        order = String(orderInfo[0][1] || 'asc').toUpperCase() === 'DESC' ? 'DESC' : 'ASC';
+    }
+
+    const filters = {};
+    jQuery('#grid_table tfoot th[data-column]').each(function(){
+        const column = jQuery(this).attr('data-column');
+        const input = jQuery(this).find('input,select').first();
+        if(column && input.length && String(input.val() || '').trim() !== ''){
+            filters[column] = input.val();
+        }
+    });
+
+    const options = document.getElementById('pdf_options');
+    const d = options ? options.dataset : {};
+
+    return {
+        intent: '<?php echo addslashes($app->intent->table); ?>',
+        columns: columns,
+        search: table.search() || '',
+        filter: filters,
+        order_by: orderBy,
+        order: order,
+        orientation: d.orientation || 'L',
+        sheet: d.sheet || 'A4',
+        size: parseInt(d.size || '7', 10),
+        up: parseInt(d.up || '8', 10),
+        down: parseInt(d.down || '8', 10),
+        left: parseInt(d.left || '6', 10),
+        right: parseInt(d.right || '6', 10)
+    };
+}
+
+function runDatatablePdfBatch(jobId, total){
+    fetch('/srv/catalog-pdf/run-datatable-pdf-job.php?job_id=' + encodeURIComponent(jobId) + '&_=' + Date.now(), {
+        credentials: 'same-origin',
+        cache: 'no-store'
+    })
+    .then(function(response){ return response.text(); })
+    .then(function(text){
+        let data;
+        try { data = JSON.parse(text); }
+        catch(e){ throw new Error('Risposta non JSON dal worker:\n' + text); }
+
+        if(!data.success && data.status === 'failed'){
+            throw new Error(data.message || 'Job PDF fallito.');
+        }
+
+        const progress = parseInt(data.progress || 0, 10);
+        const realTotal = parseInt(data.total || total || 0, 10);
+        datatablePdfButton.innerHTML = '<span class="fas fa-sync fa-spin"></span> PDF ' + progress + ' / ' + realTotal;
+
+        if(data.status === 'completed'){
+            datatablePdfRunning = false;
+            datatablePdfButton.disabled = false;
+            datatablePdfButton.classList.remove('btn-info');
+            datatablePdfButton.classList.add('btn-success');
+            datatablePdfButton.innerHTML = '<span class="far fa-file-pdf"></span> PDF pronto';
+            if(data.result_file){
+
+                /*
+                |--------------------------------------------------------------------------
+                | DOWNLOAD PDF SENZA POPUP
+                |--------------------------------------------------------------------------
+                | window.open() eseguito dopo diversi secondi viene bloccato da Chrome,
+                | perché non è più collegato direttamente al click dell'utente.
+                | Usiamo invece un link temporaneo con attributo download: non apre
+                | popup e scarica il file anche dopo una lunga generazione.
+                */
+                const downloadUrl = data.result_file + '?t=' + Date.now();
+                const downloadLink = document.createElement('a');
+
+                downloadLink.href = downloadUrl;
+                downloadLink.download = '';
+                downloadLink.style.display = 'none';
+
+                document.body.appendChild(downloadLink);
+                downloadLink.click();
+                downloadLink.remove();
+            }
+            return;
+        }
+
+        setTimeout(function(){ runDatatablePdfBatch(jobId, realTotal); }, 700);
+    })
+    .catch(function(error){
+        datatablePdfRunning = false;
+        datatablePdfButton.disabled = false;
+        datatablePdfButton.classList.remove('btn-info','btn-success');
+        datatablePdfButton.classList.add('btn-warning');
+        datatablePdfButton.innerHTML = '<span class="fas fa-exclamation-triangle"></span> Errore PDF';
+        alert('Errore esportazione PDF DataTable:\n\n' + error.message);
+        console.error(error);
+    });
+}
+
+if(datatablePdfButton){
+    datatablePdfButton.addEventListener('click', function(event){
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        if(datatablePdfRunning){ return; }
+
+        collectAllFilteredIds(function(ids){
+            if(!ids.length){ alert('Nessun record da esportare.'); return; }
+            const params = collectDatatablePdfParams();
+            if(!params.columns.length){ alert('Nessuna colonna esportabile selezionata.'); return; }
+            if(!confirm('Vuoi esportare in PDF ' + ids.length + ' record filtrati?')){ return; }
+
+            datatablePdfRunning = true;
+            datatablePdfButton.disabled = true;
+            datatablePdfButton.classList.remove('btn-success','btn-warning');
+            datatablePdfButton.classList.add('btn-info');
+            datatablePdfButton.innerHTML = '<span class="fas fa-sync fa-spin"></span> PDF 0 / ' + ids.length;
+
+            const formData = new FormData();
+            formData.append('ids', ids.join(','));
+            formData.append('params', JSON.stringify(params));
+
+            fetch('/srv/catalog-pdf/create-datatable-pdf-job.php', {
+                method: 'POST',
+                body: formData,
+                credentials: 'same-origin'
+            })
+            .then(function(response){ return response.text(); })
+            .then(function(text){
+                let data;
+                try { data = JSON.parse(text); }
+                catch(e){ throw new Error('Risposta non JSON dalla creazione job:\n' + text); }
+                if(!data.success){ throw new Error(data.message || 'Creazione job fallita.'); }
+                runDatatablePdfBatch(data.job_id, data.total);
+            })
+            .catch(function(error){
+                datatablePdfRunning = false;
+                datatablePdfButton.disabled = false;
+                datatablePdfButton.innerHTML = '<span class="far fa-file-pdf"></span> PDF';
+                alert('Errore avvio esportazione PDF:\n\n' + error.message);
+                console.error(error);
+            });
+        });
+    }, true);
+}
 
 
 
