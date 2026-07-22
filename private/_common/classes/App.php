@@ -1,4 +1,9 @@
 <?php
+/* ARCHY PDF BATCH NO-SPLIT-ROWS VERSION: 2026-07-22-1810 */
+/* ARCHY PDF MULTICELL LINK ANNOTATIONS VERSION: 2026-07-22-1745 */
+/* ARCHY PDF BATCH ALLEGATI CLICCABILI VERSION: 2026-07-22-1730 */
+/* ARCHY PDF BATCH RIGHE-ALLEGATI VERSION: 2026-07-22-1700 */
+/* ARCHY PDF BATCH FOTO VERSION: 2026-07-22-1605 */
 /*
 |--------------------------------------------------------------------------
 | NOTE DI MANUTENZIONE - EXPORT DATATABLE
@@ -85,12 +90,9 @@ public $user_id;
         else{ $session_hash = ''; }
         
         $this->db=$this->get_db();
-        // $user=mysqli_fetch_object($this->db->query("select * from archy_users where login= binary '".addslashes($this->username)."'"));
-        //$user=mysqli_fetch_object($this->db->query("select u.id, au.login, u.email, au.name as name, au.surname as surname, au.admin as admin from phpauth_sessions s left join phpauth_users u on u.id = s.uid left join //archy_users au on u.email = au.email where s.hash = '" . $session_hash . "';"));
 		$user = mysqli_fetch_object($this->db->query("
 			SELECT 
 				au.id AS user_id,
-				au.login,
 				u.email,
 				au.name AS name,
 				au.surname AS surname
@@ -113,9 +115,12 @@ public $user_id;
 			//$this->is_admin = true;
 		
 			
-			$this->user_first_name=$user->name;
-			$this->user_second_name=$user->surname;
-			$this->user_full_name=$user->name.' '.$user->surname;
+			$this->user_first_name=trim((string) $user->name);
+			$this->user_second_name=trim((string) $user->surname);
+			$this->user_full_name=trim($this->user_first_name.' '.$this->user_second_name);
+			if($this->user_full_name == ''):
+				$this->user_full_name=$user->email;
+			endif;
                         $this->username=$this->generaUsername($this->user_first_name,$this->user_second_name);
 		else:
             // FIXME: Se non sessione sempre Admin????????????????????????????????????????????????????????????
@@ -155,8 +160,137 @@ public $user_id;
                 require_once $this->subdomain_root.'/custom/custom_navbar_right.php';	
             endif;
         }
+
+        protected function apply_local_menu_extend($menu)
+        {
+            if (!isset($this->config['menu_extend']) || !is_array($this->config['menu_extend'])) {
+                return $menu;
+            }
+
+            foreach ($this->config['menu_extend'] as $menu_key => $menu_extend) {
+                if (!is_array($menu_extend)) {
+                    continue;
+                }
+
+                if (isset($menu[$menu_key]) && is_array($menu[$menu_key])) {
+                    $menu[$menu_key] = $this->merge_menu_section($menu[$menu_key], $menu_extend);
+                    continue;
+                }
+
+                $menu = $this->insert_menu_section($menu, $menu_key, $menu_extend);
+            }
+
+            return $menu;
+        }
+
+        protected function merge_menu_section($base_section, $extend_section)
+        {
+            $append_items = array();
+            $remove_items = array();
+
+            if (isset($extend_section['items']) && is_array($extend_section['items'])) {
+                $append_items = $extend_section['items'];
+                unset($extend_section['items']);
+            }
+
+            if (isset($extend_section['remove_items']) && is_array($extend_section['remove_items'])) {
+                $remove_items = $extend_section['remove_items'];
+                unset($extend_section['remove_items']);
+            }
+
+            $replace_items = isset($extend_section['replace_items']) && $extend_section['replace_items'] === true;
+            unset($extend_section['replace_items']);
+
+            $base_section = array_replace($base_section, $extend_section);
+
+            if ($remove_items && isset($base_section['items']) && is_array($base_section['items'])) {
+                $base_section['items'] = $this->remove_menu_items($base_section['items'], $remove_items);
+            }
+
+            if ($replace_items) {
+                $base_section['items'] = $append_items;
+            } elseif ($append_items) {
+                if (!isset($base_section['items']) || !is_array($base_section['items'])) {
+                    $base_section['items'] = array();
+                }
+                $base_section['items'] = array_merge($base_section['items'], $append_items);
+            }
+
+            return $base_section;
+        }
+
+        protected function remove_menu_items($items, $remove_ids)
+        {
+            $filtered_items = array();
+
+            foreach ($items as $item) {
+                if (isset($item['id']) && in_array($item['id'], $remove_ids, true)) {
+                    continue;
+                }
+
+                if (isset($item['items']) && is_array($item['items'])) {
+                    $item['items'] = $this->remove_menu_items($item['items'], $remove_ids);
+                }
+
+                $filtered_items[] = $item;
+            }
+
+            return $filtered_items;
+        }
+
+        protected function insert_menu_section($menu, $menu_key, $menu_section)
+        {
+            $after = isset($menu_section['after']) ? $menu_section['after'] : null;
+            $before = isset($menu_section['before']) ? $menu_section['before'] : null;
+            unset($menu_section['after'], $menu_section['before']);
+
+            if (!$after && !$before) {
+                $menu[$menu_key] = $menu_section;
+                return $menu;
+            }
+
+            $new_menu = array();
+            $inserted = false;
+
+            foreach ($menu as $key => $section) {
+                if (!$inserted && $before === $key) {
+                    $new_menu[$menu_key] = $menu_section;
+                    $inserted = true;
+                }
+
+                $new_menu[$key] = $section;
+
+                if (!$inserted && $after === $key) {
+                    $new_menu[$menu_key] = $menu_section;
+                    $inserted = true;
+                }
+            }
+
+            if (!$inserted) {
+                $new_menu[$menu_key] = $menu_section;
+            }
+
+            return $new_menu;
+        }
+
+        protected function resolve_menu_href($href)
+        {
+            if (!is_string($href) || strpos($href, '{') === false) {
+                return $href;
+            }
+
+            return preg_replace_callback('/\{([a-zA-Z0-9_]+)\}/', function ($matches) {
+                $key = $matches[1];
+
+                if (!array_key_exists($key, $this->config) || is_array($this->config[$key])) {
+                    return $matches[0];
+                }
+
+                return rawurlencode((string) $this->config[$key]);
+            }, $href);
+        }
         
-      
+       
 	
         public function load_menu(){
 			
@@ -201,6 +335,8 @@ $menu['events']['enabled'] = (
     isset($this->config['events']) &&
     $this->config['events'] === true
 );
+
+$menu = $this->apply_local_menu_extend($menu);
 
 $html = '<ul class="navbar-nav" data-top-nav-dropdowns="data-top-nav-dropdowns">
             <li id="dashboard_trigger">
@@ -272,7 +408,8 @@ if (
                                         //if(isset($second_level['condition']) && $second_level['condition']==$this->is_admin):
                                             if(isset($second_level['href'])):
                                                 $attr=isset($second_level['anchor_attributes'])? $second_level['anchor_attributes'] : '';
-                                                $html.='<a class="dropdown-item link-600 fw-medium eteria-target" href="'.$second_level['href'].'" data-id="'.$second_level['id'].'" '.$attr.'>'.$second_level['text'].'</a>';
+                                                $href=$this->resolve_menu_href($second_level['href']);
+                                                $html.='<a class="dropdown-item link-600 fw-medium eteria-target" href="'.$href.'" data-id="'.$second_level['id'].'" '.$attr.'>'.$second_level['text'].'</a>';
                                             else:
 
                                                 if($i==1){ $html.='<div class="card navbar-card-app shadow-none dark__bg-1000"><div class="card-body scrollbar max-h-dropdown"><div class="row">'; }
@@ -295,7 +432,8 @@ if (
 }
 
                                                     $attr=isset($third_level['anchor_attributes'])? $third_level['anchor_attributes'] : '';
-                                                    $html.='<a class="nav-link py-2 link-600 fw-medium eteria-target" href="'.$third_level['href'].'" data-id="'.$third_level['id'].'" '.$attr.'>
+                                                    $href=$this->resolve_menu_href($third_level['href']);
+                                                    $html.='<a class="nav-link py-2 link-600 fw-medium eteria-target" href="'.$href.'" data-id="'.$third_level['id'].'" '.$attr.'>
                                                         '.$third_level['text'].'
 
                                                       </a>
@@ -2861,6 +2999,24 @@ public function additional_fields($where)
 			endif;
 		endif;
 
+
+		/*
+		|--------------------------------------------------------------------------
+		| LIMITAZIONE EXPORT ASINCRONO PER ID
+		|--------------------------------------------------------------------------
+		| Il worker PDF DataTable passa solo gli ID del batch corrente. In questo
+		| modo ogni richiesta genera poche righe e libera rapidamente PHP-FPM.
+		*/
+		if (!empty($_GET['_export_ids'])):
+			$exportIds = array_values(array_unique(array_filter(array_map('intval', explode(',', (string)$_GET['_export_ids'])))));
+			if (empty($exportIds)):
+				$where = $where === '' ? '1=0' : '(' . $where . ') AND 1=0';
+			else:
+				$idCondition = $actionColumn . ' IN (' . implode(',', $exportIds) . ')';
+				$where = $where === '' ? $idCondition : '(' . $where . ') AND ' . $idCondition;
+			endif;
+		endif;
+
 		if($where !== ''):
 			$q .= ' WHERE '.$where;
 		endif;
@@ -3452,6 +3608,861 @@ public function excel(&$data, $filename, &$columns_labels, &$columns_data) {
 	|
 	*/
 
+    /*
+    |--------------------------------------------------------------------------
+    | PDF DATATABLE - SINGOLO BATCH PER WORKER
+    |--------------------------------------------------------------------------
+    | Genera esclusivamente il file temporaneo indicato dal worker. Non crea
+    | ulteriori job, non invia download e non mantiene aperta una richiesta
+    | lunga per l'intero archivio.
+    */
+    public function pdf_batch(&$data, $filename, &$columns_labels, &$columns_data){
+
+        $outputFile = isset($_GET['_batch_output']) ? (string)$_GET['_batch_output'] : '';
+
+        if ($outputFile === '') {
+            throw new Exception('Percorso output batch PDF mancante.');
+        }
+
+        $outputDir = dirname($outputFile);
+        if (!is_dir($outputDir) && !@mkdir($outputDir, 0775, true)) {
+            throw new Exception('Impossibile creare la cartella batch PDF: '.$outputDir);
+        }
+
+        if(!class_exists('TCPDF')){
+            $tcpdfPath = $this->main_root.'/private/_common/classes/tcpdf/tcpdf.php';
+            if(file_exists($tcpdfPath)){
+                require_once $tcpdfPath;
+            }
+        }
+
+        if(!class_exists('TCPDF')){
+            throw new Exception('Classe TCPDF non trovata.');
+        }
+
+        $sheet = !empty($_GET['sheet']) ? preg_replace('/[^A-Za-z0-9]/', '', $_GET['sheet']) : 'A4';
+        $orientation = !empty($_GET['orientation']) && strtoupper(substr($_GET['orientation'],0,1)) === 'P' ? 'P' : 'L';
+        $size = !empty($_GET['size']) ? max(5, min(14, (int)$_GET['size'])) : 7;
+        $top = isset($_GET['up']) ? max(4, min(50, (int)$_GET['up'])) : 8;
+        $right = isset($_GET['right']) ? max(4, min(50, (int)$_GET['right'])) : 6;
+        $bottom = isset($_GET['down']) ? max(4, min(50, (int)$_GET['down'])) : 8;
+        $left = isset($_GET['left']) ? max(4, min(50, (int)$_GET['left'])) : 6;
+
+        /*
+        |--------------------------------------------------------------------------
+        | NORMALIZZAZIONE VALORI CELLA
+        |--------------------------------------------------------------------------
+        | Alcuni formatter restituiscono stdClass o array. Nel vecchio batch
+        | il cast diretto a stringa generava:
+        | "Object of class stdClass could not be converted to string".
+        */
+        $normaliseCellValue = function($value) use (&$normaliseCellValue){
+
+            if ($value === null) {
+                return '';
+            }
+
+            if (is_bool($value)) {
+                return $value ? '1' : '0';
+            }
+
+            if (is_scalar($value)) {
+                return (string)$value;
+            }
+
+            if (is_object($value)) {
+
+                if (method_exists($value, '__toString')) {
+                    return (string)$value;
+                }
+
+                $value = get_object_vars($value);
+            }
+
+            if (is_array($value)) {
+
+                $parts = [];
+
+                array_walk_recursive($value, function($item) use (&$parts, &$normaliseCellValue){
+                    $normalised = trim($normaliseCellValue($item));
+
+                    if ($normalised !== '') {
+                        $parts[] = $normalised;
+                    }
+                });
+
+                return implode(', ', array_values(array_unique($parts)));
+            }
+
+            return '';
+        };
+
+        $cleanCell = function($value) use ($normaliseCellValue){
+
+            $value = $normaliseCellValue($value);
+            $value = preg_replace('/<br\s*\/?>/i', "\n", $value);
+            $value = preg_replace('/<\/p>\s*<p[^>]*>/i', "\n", $value);
+            $value = strip_tags($value);
+            $value = html_entity_decode($value, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+
+            return htmlspecialchars(trim($value), ENT_QUOTES, 'UTF-8');
+        };
+
+        /*
+        |--------------------------------------------------------------------------
+        | MINIATURA FOTO UFFICIALE NEL PDF BATCH
+        |--------------------------------------------------------------------------
+        | Ripristina il comportamento del precedente PDF DataTable: la colonna
+        | Foto ufficiale viene renderizzata come immagine 50x50.
+        */
+        $isPhotoColumn = function($index) use ($columns_labels, $columns_data, $normaliseCellValue){
+
+            $label = isset($columns_labels[$index])
+                ? mb_strtolower(trim($normaliseCellValue($columns_labels[$index])), 'UTF-8')
+                : '';
+
+            if (in_array($label, ['foto ufficiale','foto','immagine','immagine principale','foto principale'], true)) {
+                return true;
+            }
+
+            $column = isset($columns_data[$index]) && is_array($columns_data[$index])
+                ? $columns_data[$index]
+                : [];
+
+            foreach (['name','label','alias'] as $key) {
+                if (!empty($column[$key])) {
+                    $name = mb_strtolower(trim($normaliseCellValue($column[$key])), 'UTF-8');
+
+                    if (
+                        strpos($name, 'foto_ufficiale') !== false ||
+                        strpos($name, 'foto ufficiale') !== false ||
+                        in_array($name, ['foto','immagine','immagine_principale','image','photo'], true)
+                    ) {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        };
+
+        $renderPhotoThumbnail = function($value) use ($normaliseCellValue){
+
+            static $cache = [];
+            static $storeCloudInitialised = false;
+            static $storeCloud = null;
+
+            $raw = trim($normaliseCellValue($value));
+
+            if ($raw === '') {
+                return '';
+            }
+
+            $cacheKey = md5($raw);
+
+            if (isset($cache[$cacheKey])) {
+                return $cache[$cacheKey];
+            }
+
+            $imageHtml = function($src) {
+                $src = trim((string)$src);
+
+                if ($src === '') {
+                    return '';
+                }
+
+                return '<img src="' .
+                    htmlspecialchars($src, ENT_QUOTES, 'UTF-8') .
+                    '" width="50" height="50" />';
+            };
+
+            // Formatter già trasformato in tag IMG.
+            if (preg_match('/<img[^>]+src=["\']([^"\']+)["\']/i', $raw, $match)) {
+                return $cache[$cacheKey] = $imageHtml(
+                    html_entity_decode($match[1], ENT_QUOTES, 'UTF-8')
+                );
+            }
+
+            // URL assoluto.
+            if (preg_match('/^https?:\/\//i', $raw)) {
+                return $cache[$cacheKey] = $imageHtml($raw);
+            }
+
+            // Il campo può contenere più valori: usa il primo.
+            $parts = preg_split('/[\r\n,]+/', str_replace(['<br />','<br/>','<br>'], "\n", strip_tags($raw)));
+            $fileId = trim((string)reset($parts));
+
+            if ($fileId === '') {
+                return $cache[$cacheKey] = '';
+            }
+
+            // UUID/ID gestito da StoreCloud.
+            if (!$storeCloudInitialised) {
+                $storeCloudInitialised = true;
+
+                if (class_exists('StoreCloud')) {
+                    try {
+                        $storeCloud = new StoreCloud();
+                    } catch (Throwable $e) {
+                        $storeCloud = null;
+                    }
+                }
+            }
+
+            if ($storeCloud) {
+                try {
+                    $location = $storeCloud->getImageDetailFromDb($fileId, 'file_location');
+
+                    if ($location === 'cloudImages') {
+                        return $cache[$cacheKey] = $imageHtml(
+                            $storeCloud->getImageUrl($fileId, 'thumbnail')
+                        );
+                    }
+
+                    if ($location === 'local') {
+                        return $cache[$cacheKey] = $imageHtml($fileId);
+                    }
+                } catch (Throwable $e) {
+                    // Continua con i fallback locali.
+                }
+            }
+
+            // Path locale/relativo.
+            $documentRoot = isset($_SERVER['DOCUMENT_ROOT'])
+                ? rtrim($_SERVER['DOCUMENT_ROOT'], '/')
+                : '';
+
+            $candidates = [
+                $fileId,
+                $documentRoot . '/' . ltrim($fileId, '/'),
+                $documentRoot . '/assets/documents/upload_extrafield/' . basename($fileId),
+                $documentRoot . '/assets/documents/scheda_catalogo/' . basename($fileId),
+                $documentRoot . '/assets/img/' . basename($fileId),
+                $documentRoot . '/assets/images/' . basename($fileId)
+            ];
+
+            foreach ($candidates as $candidate) {
+                if ($candidate !== '' && is_file($candidate)) {
+                    return $cache[$cacheKey] = $imageHtml($candidate);
+                }
+            }
+
+            // Ultimo fallback: non stampa UUID/nome tecnico.
+            return $cache[$cacheKey] = '';
+        };
+
+
+        /*
+        |--------------------------------------------------------------------------
+        | COLONNE ALLEGATI NEL PDF BATCH
+        |--------------------------------------------------------------------------
+        | Le colonne di documentazione non devono mostrare URL, UUID o il generico
+        | "Vedi allegati". Mostriamo:
+        | - Nessun allegato
+        | - Allegato 1
+        | - Allegato 2
+        | - Allegato 3
+        */
+        $isAttachmentColumn = function($index) use ($columns_labels, $columns_data, $normaliseCellValue, $isPhotoColumn){
+
+            if ($isPhotoColumn($index)) {
+                return false;
+            }
+
+            $label = isset($columns_labels[$index])
+                ? mb_strtolower(trim($normaliseCellValue($columns_labels[$index])), 'UTF-8')
+                : '';
+
+            if (
+                strpos($label, 'documentazione') !== false ||
+                strpos($label, 'allegat') !== false ||
+                strpos($label, 'documenti') !== false
+            ) {
+                return true;
+            }
+
+            $column = isset($columns_data[$index]) && is_array($columns_data[$index])
+                ? $columns_data[$index]
+                : [];
+
+            foreach (['name','label','alias'] as $key) {
+                if (empty($column[$key])) {
+                    continue;
+                }
+
+                $name = mb_strtolower(trim($normaliseCellValue($column[$key])), 'UTF-8');
+
+                if (
+                    strpos($name, 'documentazione') !== false ||
+                    strpos($name, 'allegat') !== false ||
+                    strpos($name, 'attachment') !== false ||
+                    strpos($name, 'documenti') !== false
+                ) {
+                    return true;
+                }
+            }
+
+            $type = isset($column['type'])
+                ? mb_strtolower(trim($normaliseCellValue($column['type'])), 'UTF-8')
+                : '';
+
+            return in_array($type, ['bulk_upload','multiple_file','attachments'], true);
+        };
+
+        $renderAttachmentSummary = function($rawValue, $formattedValue) use ($normaliseCellValue, $cleanCell){
+
+            $formatted = trim($normaliseCellValue($formattedValue));
+            $raw = trim($normaliseCellValue($rawValue));
+
+            $plainFormatted = trim(
+                html_entity_decode(
+                    strip_tags(
+                        str_ireplace(
+                            ['<br />','<br/>','<br>'],
+                            "\n",
+                            $formatted
+                        )
+                    ),
+                    ENT_QUOTES | ENT_HTML5,
+                    'UTF-8'
+                )
+            );
+
+            if (
+                $raw === '' &&
+                (
+                    $plainFormatted === '' ||
+                    stripos($plainFormatted, 'nessun allegato') !== false
+                )
+            ) {
+                return 'Nessun allegato';
+            }
+
+            /*
+            | Recupera gli identificativi dagli attributi generati dal formatter
+            | storico: data-images e data-files.
+            */
+            $items = [];
+
+            if ($formatted !== '') {
+                foreach (['data-images', 'data-files'] as $attribute) {
+                    if (preg_match('/'.$attribute.'=["\']([^"\']*)["\']/i', $formatted, $match)) {
+                        $attributeItems = preg_split('/[\s,;|]+/', trim($match[1]));
+
+                        foreach ($attributeItems as $item) {
+                            $item = trim($item);
+
+                            if ($item !== '') {
+                                $items[] = $item;
+                            }
+                        }
+                    }
+                }
+
+                /*
+                | Compatibilità con eventuali link HTML già prodotti.
+                */
+                if (preg_match_all('/<a[^>]+href=["\']([^"\']+)["\']/i', $formatted, $links)) {
+                    foreach ($links[1] as $link) {
+                        $link = trim(html_entity_decode($link, ENT_QUOTES, 'UTF-8'));
+
+                        if ($link !== '') {
+                            $items[] = $link;
+                        }
+                    }
+                }
+            }
+
+            /*
+            | Se il formatter non espone gli ID, usa il valore grezzo. Gestisce
+            | serializzazioni semplici, JSON e liste separate da virgola/a capo.
+            */
+            if (empty($items) && $raw !== '') {
+
+                $decodedJson = json_decode($raw, true);
+
+                if (is_array($decodedJson)) {
+                    array_walk_recursive($decodedJson, function($item) use (&$items){
+                        if (is_scalar($item) && trim((string)$item) !== '') {
+                            $items[] = trim((string)$item);
+                        }
+                    });
+                } else {
+                    $unserialised = @unserialize($raw);
+
+                    if (is_array($unserialised)) {
+                        array_walk_recursive($unserialised, function($item) use (&$items){
+                            if (is_scalar($item) && trim((string)$item) !== '') {
+                                $items[] = trim((string)$item);
+                            }
+                        });
+                    } else {
+                        $rawParts = preg_split(
+                            '/[\r\n,;|]+/',
+                            str_ireplace(
+                                ['<br />','<br/>','<br>'],
+                                "\n",
+                                strip_tags($raw)
+                            )
+                        );
+
+                        foreach ($rawParts as $item) {
+                            $item = trim($item);
+
+                            if ($item !== '') {
+                                $items[] = $item;
+                            }
+                        }
+                    }
+                }
+            }
+
+            $items = array_values(array_unique(array_filter($items, function($item){
+                $item = trim((string)$item);
+
+                return (
+                    $item !== '' &&
+                    strcasecmp($item, 'Vedi allegati') !== 0 &&
+                    stripos($item, 'Nessun allegato') === false
+                );
+            })));
+
+            /*
+            | Se il formatter dice che ci sono allegati ma non espone gli ID,
+            | almeno mostriamo un elemento invece del generico "Vedi allegati".
+            */
+            if (empty($items) && stripos($plainFormatted, 'vedi allegati') !== false) {
+                $items = ['allegato'];
+            }
+
+            if (empty($items)) {
+                return 'Nessun allegato';
+            }
+
+            /*
+            |--------------------------------------------------------------------------
+            | RISOLUZIONE LINK ALLEGATI
+            |--------------------------------------------------------------------------
+            | Gli elementi possono essere URL/path oppure UUID StoreCloud/R2.
+            | Il testo resta compatto (Allegato 1, Allegato 2...), ma diventa
+            | cliccabile nel PDF.
+            */
+            static $storeCloudChecked = false;
+            static $storeCloud = null;
+            static $storeR2 = null;
+            static $storeRepo = null;
+
+            if (!$storeCloudChecked) {
+                $storeCloudChecked = true;
+
+                if (class_exists('StoreCloud')) {
+                    try {
+                        $storeCloud = new StoreCloud();
+                    } catch (Throwable $e) {
+                        $storeCloud = null;
+                    }
+                }
+
+                if (class_exists('StoreR2Adapter')) {
+                    try {
+                        $storeR2 = new StoreR2Adapter();
+                    } catch (Throwable $e) {
+                        $storeR2 = null;
+                    }
+                }
+
+                if (class_exists('StoreFileRepository')) {
+                    try {
+                        $storeRepo = new StoreFileRepository();
+                    } catch (Throwable $e) {
+                        $storeRepo = null;
+                    }
+                }
+            }
+
+            $isAbsoluteUrl = function($value){
+                return preg_match('/^https?:\/\//i', trim((string)$value));
+            };
+
+            $isUuid = function($value){
+                return preg_match(
+                    '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i',
+                    trim((string)$value)
+                );
+            };
+
+            $resolveHref = function($item) use (
+                $storeCloud,
+                $storeR2,
+                $storeRepo,
+                $isAbsoluteUrl,
+                $isUuid
+            ){
+                $item = trim((string)$item);
+
+                if ($item === '') {
+                    return '';
+                }
+
+                if ($isAbsoluteUrl($item)) {
+                    return $item;
+                }
+
+                if (strpos($item, '/') === 0) {
+                    $host = isset($_SERVER['HTTP_HOST']) ? trim((string)$_SERVER['HTTP_HOST']) : '';
+
+                    if ($host !== '') {
+                        return 'https://' . $host . $item;
+                    }
+
+                    return $item;
+                }
+
+                if ($isUuid($item)) {
+                    try {
+                        $fileLocation = '';
+
+                        if ($storeRepo) {
+                            $fileInfo = $storeRepo->findAll($item);
+
+                            if (is_array($fileInfo) && !empty($fileInfo['file_location'])) {
+                                $fileLocation = (string)$fileInfo['file_location'];
+                            }
+                        }
+
+                        if ($fileLocation === '' && $storeCloud) {
+                            $fileLocation = (string)$storeCloud->getImageDetailFromDb(
+                                $item,
+                                'file_location'
+                            );
+                        }
+
+                        if ($fileLocation === 'cloudImages' && $storeCloud) {
+                            return (string)$storeCloud->getImageUrl($item, 'public');
+                        }
+
+                        if ($storeR2) {
+                            return (string)$storeR2->getFileUrl($item);
+                        }
+                    } catch (Throwable $e) {
+                        return '';
+                    }
+
+                    return '';
+                }
+
+                /*
+                | Compatibilità con i file storage storici salvati solo come nome.
+                */
+                return 'https://demo-storage.archyart.it/uploads/' .
+                    rawurlencode(basename($item));
+            };
+
+            $links = [];
+
+            foreach ($items as $position => $item) {
+
+                $label = 'Allegato ' . ($position + 1);
+                $href = trim($resolveHref($item));
+
+                if ($href !== '') {
+                    $links[] =
+                        '<a href="' .
+                        htmlspecialchars($href, ENT_QUOTES, 'UTF-8') .
+                        '" target="_blank">' .
+                        $cleanCell($label) .
+                        '</a>';
+                } else {
+                    /*
+                    | Se un vecchio UUID non è più risolvibile, non blocchiamo il PDF.
+                    */
+                    $links[] = $cleanCell($label);
+                }
+            }
+
+            return implode('<br>', $links);
+        };
+
+        /*
+        |--------------------------------------------------------------------------
+        | RENDERING PDF CON MULTICELL
+        |--------------------------------------------------------------------------
+        | La tabella HTML di TCPDF può spezzare le righe tra due pagine. Qui ogni
+        | record viene misurato prima della stampa e, se non entra nello spazio
+        | residuo, viene spostato integralmente alla pagina seguente.
+        */
+        $pdf = new TCPDF($orientation, 'mm', $sheet, true, 'UTF-8', false);
+        $pdf->SetCreator('Archy Art');
+        $pdf->SetAuthor('Archy Art');
+        $pdf->setPrintHeader(false);
+        $pdf->setPrintFooter(false);
+        $pdf->SetMargins($left, $top, $right);
+        $pdf->SetAutoPageBreak(false, $bottom);
+        $pdf->setImageScale(1.0);
+        $pdf->setJPEGQuality(70);
+        $pdf->SetFont('dejavusans', '', $size);
+        $pdf->AddPage();
+
+        $pdfTitle = $normaliseCellValue($filename);
+        if ($pdfTitle === '') {
+            $pdfTitle = 'Esportazione DataTable';
+        }
+
+        $pageWidth  = $pdf->getPageWidth();
+        $pageHeight = $pdf->getPageHeight();
+        $usableWidth = $pageWidth - $left - $right;
+        $pageBottom = $pageHeight - $bottom;
+        $columnCount = max(1, count($columns_labels));
+
+        /* Colonna foto leggermente più larga; le altre si dividono lo spazio. */
+        $photoIndexes = [];
+        foreach ($columns_labels as $i => $unusedLabel) {
+            if ($isPhotoColumn($i)) {
+                $photoIndexes[] = $i;
+            }
+        }
+        $photoWidth = ($columnCount > 8) ? 13.0 : 18.0;
+        $remainingWidth = $usableWidth - (count($photoIndexes) * $photoWidth);
+        $normalColumns = max(1, $columnCount - count($photoIndexes));
+        $normalWidth = $remainingWidth / $normalColumns;
+        $columnWidths = [];
+        foreach ($columns_labels as $i => $unusedLabel) {
+            $columnWidths[$i] = in_array($i, $photoIndexes, true) ? $photoWidth : $normalWidth;
+        }
+
+        $borderColor = [143, 164, 149];
+        $headerFill  = [223, 242, 225]; // verde salvia chiaro
+        $headerText  = [53, 91, 56];
+        $rowOddFill  = [248, 251, 248];
+        $rowEvenFill = [255, 255, 255];
+        $cellPadding = 1.0;
+        $lineHeight  = max(3.2, $size * 0.48);
+
+        $drawTitle = function() use ($pdf, $pdfTitle, $left, $size) {
+            $pdf->SetXY($left, $pdf->GetY());
+            $pdf->SetFont('dejavusans', 'B', max(11, $size + 4));
+            $pdf->SetTextColor(32, 45, 38);
+            $pdf->Cell(0, 7, $pdfTitle, 0, 1, 'L', false);
+            $pdf->Ln(1.5);
+            $pdf->SetFont('dejavusans', '', $size);
+        };
+
+        $drawHeader = function() use (
+            $pdf, $columns_labels, $columnWidths, $left, $pageBottom,
+            $normaliseCellValue, $borderColor, $headerFill, $headerText,
+            $cellPadding, $lineHeight, $size
+        ) {
+            $pdf->SetFont('dejavusans', 'B', $size);
+            $headerHeight = $lineHeight + (2 * $cellPadding);
+            foreach ($columns_labels as $i => $label) {
+                $txt = trim(strip_tags($normaliseCellValue($label)));
+                $h = $pdf->getStringHeight(max(1, $columnWidths[$i] - 2 * $cellPadding), $txt, false, true, '', 1);
+                $headerHeight = max($headerHeight, $h + 2 * $cellPadding);
+            }
+            if ($pdf->GetY() + $headerHeight > $pageBottom) {
+                $pdf->AddPage();
+            }
+            $x = $left;
+            $y = $pdf->GetY();
+            $pdf->SetDrawColor($borderColor[0], $borderColor[1], $borderColor[2]);
+            $pdf->SetFillColor($headerFill[0], $headerFill[1], $headerFill[2]);
+            $pdf->SetTextColor($headerText[0], $headerText[1], $headerText[2]);
+            foreach ($columns_labels as $i => $label) {
+                $w = $columnWidths[$i];
+                $pdf->Rect($x, $y, $w, $headerHeight, 'DF');
+                $pdf->SetXY($x + $cellPadding, $y + $cellPadding);
+                $pdf->MultiCell($w - 2 * $cellPadding, $lineHeight, trim(strip_tags($normaliseCellValue($label))), 0, 'L', false, 0, '', '', true, 0, false, true, $headerHeight - 2 * $cellPadding, 'M');
+                $x += $w;
+            }
+            $pdf->SetXY($left, $y + $headerHeight);
+            $pdf->SetFont('dejavusans', '', $size);
+            $pdf->SetTextColor(0, 0, 0);
+            return $headerHeight;
+        };
+
+        $drawTitle();
+        $drawHeader();
+
+        $rowNumber = 0;
+        while ($row = mysqli_fetch_row($data)) {
+            $prepared = [];
+            $rowHeight = $lineHeight + 2 * $cellPadding;
+
+            foreach ($row as $index => $cell) {
+                $rawCell = $cell;
+                try {
+                    if (isset($columns_data[$index]['pdf_formatter'])) {
+                        $formatterInput = (is_object($cell) || is_array($cell)) ? $normaliseCellValue($cell) : $cell;
+                        $cell = $columns_data[$index]['pdf_formatter']($formatterInput, '');
+                    } elseif (isset($columns_data[$index]['formatter']) && !isset($columns_data[$index]['formatter_hide_in_pdf'])) {
+                        if (isset($columns_data[$index]['type']) && $columns_data[$index]['type'] === 'file') {
+                            $cell = basename(trim($normaliseCellValue($cell)));
+                        } else {
+                            $formatterInput = (is_object($cell) || is_array($cell)) ? $normaliseCellValue($cell) : $cell;
+                            $cell = $columns_data[$index]['formatter']($formatterInput, '');
+                        }
+                    }
+                } catch (Throwable $formatterError) {
+                    $cell = $normaliseCellValue($rawCell);
+                }
+
+                $w = isset($columnWidths[$index]) ? $columnWidths[$index] : $normalWidth;
+
+                if ($isPhotoColumn($index)) {
+                    $photoHtml = $renderPhotoThumbnail($rawCell);
+                    $src = '';
+                    if (preg_match('/<img[^>]+src=["\']([^"\']+)["\']/i', $photoHtml, $m)) {
+                        $src = html_entity_decode($m[1], ENT_QUOTES, 'UTF-8');
+                    }
+                    $prepared[$index] = ['type' => 'photo', 'src' => $src];
+                    $rowHeight = max($rowHeight, 15.0);
+                } elseif ($isAttachmentColumn($index)) {
+                    $attachmentHtml = $renderAttachmentSummary($rawCell, $cell);
+                    $links = [];
+                    if (preg_match_all('/<a[^>]+href=["\']([^"\']+)["\'][^>]*>(.*?)<\/a>/is', $attachmentHtml, $matches, PREG_SET_ORDER)) {
+                        foreach ($matches as $m) {
+                            $links[] = [
+                                'href' => html_entity_decode($m[1], ENT_QUOTES, 'UTF-8'),
+                                'label' => trim(strip_tags(html_entity_decode($m[2], ENT_QUOTES, 'UTF-8')))
+                            ];
+                        }
+                    }
+                    if (!$links) {
+                        $plain = trim(strip_tags(str_ireplace(['<br>','<br/>','<br />'], "\n", $attachmentHtml)));
+                        $prepared[$index] = ['type' => 'text', 'text' => $plain !== '' ? $plain : 'Nessun allegato'];
+                        $h = $pdf->getStringHeight(max(1, $w - 2 * $cellPadding), $prepared[$index]['text'], false, true, '', 1);
+                        $rowHeight = max($rowHeight, $h + 2 * $cellPadding);
+                    } else {
+                        /*
+                        | MultiCell non dispone di un parametro URL. Calcoliamo
+                        | quindi l'altezza reale di ogni etichetta e, in fase di
+                        | stampa, aggiungiamo una vera annotazione PDF con Link().
+                        */
+                        $linksHeight = 0.0;
+                        foreach ($links as &$linkItem) {
+                            $linkItem['height'] = max(
+                                $lineHeight,
+                                $pdf->getStringHeight(
+                                    max(1, $w - 2 * $cellPadding),
+                                    $linkItem['label'],
+                                    false,
+                                    true,
+                                    '',
+                                    1
+                                )
+                            );
+                            $linksHeight += $linkItem['height'];
+                        }
+                        unset($linkItem);
+
+                        $prepared[$index] = ['type' => 'links', 'links' => $links];
+                        $rowHeight = max($rowHeight, $linksHeight + 2 * $cellPadding);
+                    }
+                } else {
+                    $text = trim(strip_tags(str_ireplace(['<br>','<br/>','<br />'], "\n", $normaliseCellValue($cell))));
+                    $prepared[$index] = ['type' => 'text', 'text' => html_entity_decode($text, ENT_QUOTES, 'UTF-8')];
+                    $h = $pdf->getStringHeight(max(1, $w - 2 * $cellPadding), $prepared[$index]['text'], false, true, '', 1);
+                    $rowHeight = max($rowHeight, $h + 2 * $cellPadding);
+                }
+            }
+
+            /* La riga viene spostata integralmente alla pagina successiva. */
+            if ($pdf->GetY() + $rowHeight > $pageBottom) {
+                $pdf->AddPage();
+                $drawHeader();
+            }
+
+            $x = $left;
+            $y = $pdf->GetY();
+            $fill = ($rowNumber % 2 === 0) ? $rowEvenFill : $rowOddFill;
+            $pdf->SetDrawColor($borderColor[0], $borderColor[1], $borderColor[2]);
+            $pdf->SetFillColor($fill[0], $fill[1], $fill[2]);
+            $pdf->SetTextColor(0, 0, 0);
+
+            foreach ($columns_labels as $index => $unusedLabel) {
+                $w = $columnWidths[$index];
+                $content = isset($prepared[$index]) ? $prepared[$index] : ['type' => 'text', 'text' => ''];
+                $pdf->Rect($x, $y, $w, $rowHeight, 'DF');
+
+                if ($content['type'] === 'photo' && $content['src'] !== '') {
+                    try {
+                        $maxW = max(1, $w - 2 * $cellPadding);
+                        $maxH = max(1, $rowHeight - 2 * $cellPadding);
+                        $pdf->Image($content['src'], $x + $cellPadding, $y + $cellPadding, $maxW, $maxH, '', '', '', true, 150, '', false, false, 0, true, false, false);
+                    } catch (Throwable $imageError) {
+                        // La riga resta valida anche se una miniatura remota non è disponibile.
+                    }
+                } elseif ($content['type'] === 'links') {
+                    $cy = $y + $cellPadding;
+                    $linkWidth = max(1, $w - 2 * $cellPadding);
+
+                    $pdf->SetTextColor(0, 0, 190);
+                    $pdf->SetFont('dejavusans', 'U', $size);
+
+                    foreach ($content['links'] as $linkData) {
+                        $linkHeight = isset($linkData['height'])
+                            ? (float)$linkData['height']
+                            : $lineHeight;
+
+                        $pdf->SetXY($x + $cellPadding, $cy);
+                        $pdf->MultiCell(
+                            $linkWidth,
+                            $lineHeight,
+                            $linkData['label'],
+                            0,
+                            'L',
+                            false,
+                            0,
+                            '',
+                            '',
+                            true,
+                            0,
+                            false,
+                            true,
+                            $linkHeight,
+                            'T'
+                        );
+
+                        /*
+                        | Link() crea l'annotazione cliccabile nel PDF. Il testo
+                        | resta gestito da MultiCell, quindi può andare a capo.
+                        */
+                        if (!empty($linkData['href'])) {
+                            $pdf->Link(
+                                $x + $cellPadding,
+                                $cy,
+                                $linkWidth,
+                                $linkHeight,
+                                $linkData['href']
+                            );
+                        }
+
+                        $cy += $linkHeight;
+                    }
+
+                    $pdf->SetFont('dejavusans', '', $size);
+                    $pdf->SetTextColor(0, 0, 0);
+                } else {
+                    $pdf->SetXY($x + $cellPadding, $y + $cellPadding);
+                    $pdf->MultiCell($w - 2 * $cellPadding, $lineHeight, $content['text'], 0, 'L', false, 0, '', '', true, 0, false, true, $rowHeight - 2 * $cellPadding, 'T');
+                }
+                $x += $w;
+            }
+
+            $pdf->SetXY($left, $y + $rowHeight);
+            $rowNumber++;
+        }
+
+        $pdf->Output($outputFile, 'F');
+        unset($pdf);
+
+        if(!is_file($outputFile) || filesize($outputFile) <= 0){
+            throw new Exception('Batch PDF non creato o vuoto: '.basename($outputFile));
+        }
+
+        return true;
+    }
+
 	public function pdf(&$data,$filename,&$columns_labels,&$columns_data){
 
         $job_id = uniqid();
@@ -3564,6 +4575,17 @@ public function excel(&$data, $filename, &$columns_labels, &$columns_data) {
             */
 
             $escape_pdf_cell = function($value){
+				
+				if(is_array($value)):
+                    $flat = [];
+                    array_walk_recursive($value, function($item) use (&$flat){
+                        if(is_scalar($item) && trim((string)$item) != ''):
+                            $flat[] = trim((string)$item);
+                        endif;
+                    });
+                    $value = implode(', ', $flat);
+                endif;
+
                 $value = (string)$value;
 
                 // Mantiene separazioni leggibili già presenti.
@@ -4939,13 +5961,26 @@ public function excel(&$data, $filename, &$columns_labels, &$columns_data) {
 		$notice=new Notice();
 		echo json_encode($notice->html());
 	}
+	public function fetch_dashboard_notices(){
+		$notice=new Notice();
+		echo json_encode($notice->dashboard_html(6));
+	}
 	public function mark_notices_as_read(){
 		$notice=new Notice();
 		$notice->mark_notices_as_read();
 	}
 	public function mark_notice_as_read(){
 		$notice=new Notice();
-		$notice->mark_notice_as_read($_POST['id']);
+		$notice->mark_notice_as_read(isset($_POST['id'])? $_POST['id'] : 0);
+	}
+	public function toggle_notice_seen(){
+		$notice=new Notice();
+		$notice->toggle_notice_seen(isset($_POST['id'])? $_POST['id'] : 0);
+		echo json_encode($notice->dashboard_html(6));
+	}
+	public function get_notice_detail(){
+		$notice=new Notice();
+		echo json_encode($notice->detail_html(isset($_POST['id'])? $_POST['id'] : 0));
 	}
 	
 	public function association(){
