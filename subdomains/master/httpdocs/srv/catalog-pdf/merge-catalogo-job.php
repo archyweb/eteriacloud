@@ -135,14 +135,12 @@ if (!$documentRoot || !$catalogFolder) {
 */
 
 $possibleTcpdfPaths = [
-    '/var/www/vhosts/archymedia.com/private/_common/classes/tcpdf/tcpdf.php',
     '/var/www/vhosts/archyart.it/private/_common/classes/tcpdf/tcpdf.php',
     dirname($documentRoot, 2) . '/private/_common/classes/tcpdf/tcpdf.php',
     dirname($documentRoot, 1) . '/private/_common/classes/tcpdf/tcpdf.php',
 ];
 
 $possibleFpdiPaths = [
-    '/var/www/vhosts/archymedia.com/private/_common/classes/fpdi/src/autoload.php',
     '/var/www/vhosts/archyart.it/private/_common/classes/fpdi/src/autoload.php',
     dirname($documentRoot, 2) . '/private/_common/classes/fpdi/src/autoload.php',
     dirname($documentRoot, 1) . '/private/_common/classes/fpdi/src/autoload.php',
@@ -269,7 +267,11 @@ function catalog_pdf_update_job_progress($jobId, $progress, $total = null, $stat
     }
 
     if ($appendLog !== null && $appendLog !== '') {
-        $sets[] = "log = CONCAT(IFNULL(log, ''), '\\n" . $db->real_escape_string($appendLog) . "')";
+        $sets[] = "log = CONCAT(IFNULL(log, ''), '\n" . $db->real_escape_string($appendLog) . "')";
+    }
+
+    if ($status === 'completed' || $status === 'failed') {
+        $sets[] = "finished_at = NOW()";
     }
 
     @ $db->query("UPDATE archy_jobs SET " . implode(', ', $sets) . " WHERE id = " . $jobId);
@@ -493,7 +495,33 @@ $db = null;
 
 if (!empty($_GET['job_id'])) {
 
-    $config = require dirname(dirname(__DIR__)) . '/config-local.php';
+    /*
+|--------------------------------------------------------------------------
+| BOOTSTRAP CONFIG STANDALONE
+|--------------------------------------------------------------------------
+| config-local.php usa ArchyEnv. Gli endpoint sotto /srv non passano dal
+| normale index.php, quindi carichiamo prima le classi comuni.
+*/
+$documentRoot = dirname(dirname(__DIR__));
+$mainRoot = dirname(dirname(dirname($documentRoot)));
+
+if (!class_exists('ArchyEnv')) {
+    $loadClasses = $mainRoot . '/private/_common/classes/load_classes.php';
+
+    if (!is_file($loadClasses)) {
+        throw new RuntimeException('Bootstrap gestionale non trovato: ' . $loadClasses);
+    }
+
+    require_once $loadClasses;
+}
+
+$configFile = $documentRoot . '/config-local.php';
+
+if (!is_file($configFile)) {
+    throw new RuntimeException('config-local.php non trovato: ' . $configFile);
+}
+
+$config = require $configFile;
 
     $db = new mysqli(
         $config['db']['host'],
