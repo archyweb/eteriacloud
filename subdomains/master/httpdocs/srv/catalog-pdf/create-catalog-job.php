@@ -8,7 +8,33 @@ error_reporting(E_ALL);
 
 header('Content-Type: application/json');
 
-$config = require dirname(dirname(__DIR__)) . '/config-local.php';
+/*
+|--------------------------------------------------------------------------
+| BOOTSTRAP CONFIG STANDALONE
+|--------------------------------------------------------------------------
+| config-local.php usa ArchyEnv. Gli endpoint sotto /srv non passano dal
+| normale index.php, quindi carichiamo prima le classi comuni.
+*/
+$documentRoot = dirname(dirname(__DIR__));
+$mainRoot = dirname(dirname(dirname($documentRoot)));
+
+if (!class_exists('ArchyEnv')) {
+    $loadClasses = $mainRoot . '/private/_common/classes/load_classes.php';
+
+    if (!is_file($loadClasses)) {
+        throw new RuntimeException('Bootstrap gestionale non trovato: ' . $loadClasses);
+    }
+
+    require_once $loadClasses;
+}
+
+$configFile = $documentRoot . '/config-local.php';
+
+if (!is_file($configFile)) {
+    throw new RuntimeException('config-local.php non trovato: ' . $configFile);
+}
+
+$config = require $configFile;
 
 $db = new mysqli(
     $config['db']['host'],
