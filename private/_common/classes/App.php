@@ -3624,6 +3624,18 @@ public function excel(&$data, $filename, &$columns_labels, &$columns_data) {
             throw new Exception('Percorso output batch PDF mancante.');
         }
 
+        /*
+        | Batch dinamico: il worker richiede almeno N righe, ma il PDF continua
+        | fino al termine naturale della pagina corrente. Il numero effettivo di
+        | righe renderizzate viene scritto nel file meta per aggiornare l'offset.
+        */
+        $minimumBatchRows = isset($_GET['_batch_min_rows'])
+            ? max(1, (int)$_GET['_batch_min_rows'])
+            : 0;
+        $batchMetaFile = isset($_GET['_batch_meta_output'])
+            ? (string)$_GET['_batch_meta_output']
+            : '';
+
         $outputDir = dirname($outputFile);
         if (!is_dir($outputDir) && !@mkdir($outputDir, 0775, true)) {
             throw new Exception('Impossibile creare la cartella batch PDF: '.$outputDir);
@@ -4366,8 +4378,20 @@ public function excel(&$data, $filename, &$columns_labels, &$columns_data) {
                 }
             }
 
+            /*
+            | Dopo il minimo richiesto, chiudiamo il batch prima della prima riga
+            | che richiederebbe una nuova pagina. In questo modo ogni PDF
+            | temporaneo termina al fondo naturale di una pagina e il merge non
+            | introduce pagine mezze vuote ogni N record.
+            */
+            $needsNewPage = ($pdf->GetY() + $rowHeight > $pageBottom);
+
+            if ($needsNewPage && $minimumBatchRows > 0 && $rowNumber >= $minimumBatchRows) {
+                break;
+            }
+
             /* La riga viene spostata integralmente alla pagina successiva. */
-            if ($pdf->GetY() + $rowHeight > $pageBottom) {
+            if ($needsNewPage) {
                 $pdf->AddPage();
                 $drawHeader();
             }
@@ -4455,6 +4479,21 @@ public function excel(&$data, $filename, &$columns_labels, &$columns_data) {
 
         $pdf->Output($outputFile, 'F');
         unset($pdf);
+
+        if ($batchMetaFile !== '') {
+            $metaDir = dirname($batchMetaFile);
+            if (!is_dir($metaDir)) {
+                @mkdir($metaDir, 0775, true);
+            }
+            file_put_contents(
+                $batchMetaFile,
+                json_encode(
+                    ['rows_processed' => $rowNumber],
+                    JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
+                ),
+                LOCK_EX
+            );
+        }
 
         if(!is_file($outputFile) || filesize($outputFile) <= 0){
             throw new Exception('Batch PDF non creato o vuoto: '.basename($outputFile));
