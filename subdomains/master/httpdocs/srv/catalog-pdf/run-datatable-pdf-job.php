@@ -5,8 +5,8 @@ ini_set('display_errors', 0);
 error_reporting(E_ALL);
 ini_set('log_errors', 1);
 ini_set('error_log', __DIR__ . '/datatable-pdf-job-error.log');
-set_time_limit(45);
-ini_set('memory_limit', '384M');
+set_time_limit(75);
+ini_set('memory_limit', '512M');
 ob_start();
 header('Content-Type: application/json; charset=utf-8');
 
@@ -65,13 +65,32 @@ if ($job->status === 'failed') {
     json_out(['success'=>false,'status'=>'failed','progress'=>(int)$job->progress,'total'=>(int)$job->total,'message'=>$job->log]);
 }
 
+$lockFile = sys_get_temp_dir() . '/archy_datatable_pdf_' . $jobId . '.lock';
+$lockHandle = fopen($lockFile, 'c');
+if (!$lockHandle || !flock($lockHandle, LOCK_EX | LOCK_NB)) {
+    json_out(['success'=>true,'status'=>'busy','progress'=>(int)$job->progress,'total'=>(int)$job->total,'message'=>'Worker già in esecuzione.']);
+}
+
+register_shutdown_function(function() use ($db, $jobId, $lockHandle) {
+    $last = error_get_last();
+    if ($last && in_array($last['type'], [E_ERROR,E_PARSE,E_CORE_ERROR,E_COMPILE_ERROR,E_USER_ERROR], true)) {
+        $msg = 'Errore PHP fatale: ' . $last['message'] . ' | File: ' . $last['file'] . ' | Riga: ' . $last['line'];
+        $safe = $db->real_escape_string($msg);
+        @$db->query("UPDATE archy_jobs SET status='failed',finished_at=NOW(),log=CONCAT(IFNULL(log,''),'\n', '{$safe}') WHERE id=".(int)$jobId);
+        if (!headers_sent()) { http_response_code(500); header('Content-Type: application/json; charset=utf-8'); }
+        if (ob_get_length()) { @ob_clean(); }
+        echo json_encode(['success'=>false,'status'=>'failed','message'=>$msg], JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);
+    }
+    if (is_resource($lockHandle)) { @flock($lockHandle, LOCK_UN); @fclose($lockHandle); }
+});
+
 $payload = json_decode($job->payload, true);
 if (!is_array($payload) || empty($payload['ids']) || empty($payload['params'])) {
     fail_job($db, $jobId, 'Payload job non valido.');
 }
 $ids = array_values(array_filter(array_map('intval', $payload['ids'])));
 $params = $payload['params'];
-$batchSize = 100; // massimo 100 opere per PDF temporaneo
+$batchSize = isset($payload['batch_size']) ? max(10, min(50, (int)$payload['batch_size'])) : 40; // batch piccoli e stabili
 $processed = (int)$job->progress;
 $total = count($ids);
 
@@ -120,12 +139,17 @@ try {
         $_GET['_export_ids'] = implode(',', $batchIds);
         $_GET['_batch_output'] = $batchFile;
 
+        $firstId = reset($batchIds);
+        $lastId = end($batchIds);
+        $memMb = round(memory_get_usage(true) / 1048576, 1);
+        $db->query("UPDATE archy_jobs SET log=CONCAT(IFNULL(log,''),'\nAvvio batch {$batchNo}: offset {$processed}, ID {$firstId}-{$lastId}, memoria {$memMb} MB') WHERE id={$jobId}");
+
         $app->export();
 
         $processed += count($batchIds);
         $safeBatch = $db->real_escape_string(basename($batchFile));
         $db->query("UPDATE archy_jobs SET progress={$processed},total={$total},log=CONCAT(IFNULL(log,''),'\nCreato {$safeBatch}: {$processed}/{$total}') WHERE id={$jobId}");
-        json_out(['success'=>true,'status'=>'processing','progress'=>$processed,'total'=>$total]);
+        json_out(['success'=>true,'status'=>'processing','progress'=>$processed,'total'=>$total,'batch'=>$batchNo,'batch_size'=>count($batchIds)]);
     }
 
     $batchFiles = glob($jobDir . '/batch_*.pdf');
@@ -139,16 +163,11 @@ try {
 
     /*
     |--------------------------------------------------------------------------
-    | MERGE LINK-SAFE
+    | MERGE PDF CON FPDI
     |--------------------------------------------------------------------------
-    | FPDI importa le pagine come template e perde le annotazioni cliccabili.
-    | Per preservare i link usiamo, in ordine:
-    | 1. copia diretta se esiste un solo batch;
-    | 2. qpdf;
-    | 3. pdfunite.
-    |
-    | Se nessun merger è disponibile il job fallisce in JSON, senza corrompere
-    | il PDF e senza ricadere su FPDI.
+    | FPDI è già installato nel gestionale e viene usato per accorpare i PDF
+    | temporanei generati a batch. Con un solo batch manteniamo la copia diretta;
+    | con più batch importiamo tutte le pagine nel PDF finale.
     */
     $mergeMethod = '';
 
@@ -158,76 +177,46 @@ try {
         }
         $mergeMethod = 'copy';
     } else {
-        $runCommand = function(array $command, &$stdout = '', &$stderr = '') {
-            if (!function_exists('proc_open')) {
-                return 127;
-            }
+        $tcpdfPath = $mainRoot . '/private/_common/classes/tcpdf/tcpdf.php';
+        $fpdiPath = $mainRoot . '/private/_common/classes/fpdi/src/autoload.php';
 
-            $descriptors = [
-                0 => ['pipe', 'r'],
-                1 => ['pipe', 'w'],
-                2 => ['pipe', 'w'],
-            ];
-
-            $process = @proc_open($command, $descriptors, $pipes, null, null, ['bypass_shell' => true]);
-
-            if (!is_resource($process)) {
-                return 127;
-            }
-
-            fclose($pipes[0]);
-            $stdout = stream_get_contents($pipes[1]);
-            fclose($pipes[1]);
-            $stderr = stream_get_contents($pipes[2]);
-            fclose($pipes[2]);
-
-            return proc_close($process);
-        };
-
-        $qpdfCandidates = ['/usr/bin/qpdf', '/usr/local/bin/qpdf', 'qpdf'];
-        $pdfuniteCandidates = ['/usr/bin/pdfunite', '/usr/local/bin/pdfunite', 'pdfunite'];
-        $mergedOk = false;
-        $mergeErrors = [];
-
-        foreach ($qpdfCandidates as $qpdf) {
-            $command = array_merge([$qpdf, '--empty', '--pages'], $batchFiles, ['--', $outFile]);
-            $stdout = $stderr = '';
-            $exitCode = $runCommand($command, $stdout, $stderr);
-
-            if ($exitCode === 0 && is_file($outFile) && filesize($outFile) > 0) {
-                $mergedOk = true;
-                $mergeMethod = 'qpdf';
-                break;
-            }
-
-            @unlink($outFile);
-            $mergeErrors[] = 'qpdf('.$qpdf.') exit '.$exitCode.': '.trim($stderr ?: $stdout);
+        if (!is_file($tcpdfPath)) {
+            throw new Exception('TCPDF non trovato: ' . $tcpdfPath);
         }
 
-        if (!$mergedOk) {
-            foreach ($pdfuniteCandidates as $pdfunite) {
-                $command = array_merge([$pdfunite], $batchFiles, [$outFile]);
-                $stdout = $stderr = '';
-                $exitCode = $runCommand($command, $stdout, $stderr);
+        if (!is_file($fpdiPath)) {
+            throw new Exception('FPDI non trovato: ' . $fpdiPath);
+        }
 
-                if ($exitCode === 0 && is_file($outFile) && filesize($outFile) > 0) {
-                    $mergedOk = true;
-                    $mergeMethod = 'pdfunite';
-                    break;
-                }
+        require_once $tcpdfPath;
+        require_once $fpdiPath;
 
-                @unlink($outFile);
-                $mergeErrors[] = 'pdfunite('.$pdfunite.') exit '.$exitCode.': '.trim($stderr ?: $stdout);
+        $merged = new \setasign\Fpdi\Tcpdf\Fpdi();
+        $merged->setPrintHeader(false);
+        $merged->setPrintFooter(false);
+        $merged->SetMargins(0, 0, 0);
+        $merged->SetAutoPageBreak(false, 0);
+
+        foreach ($batchFiles as $file) {
+            if (!is_file($file) || filesize($file) <= 0) {
+                throw new Exception('Batch PDF non valido: ' . basename($file));
+            }
+
+            $pages = $merged->setSourceFile($file);
+
+            for ($pageNo = 1; $pageNo <= $pages; $pageNo++) {
+                $templateId = $merged->importPage($pageNo);
+                $size = $merged->getTemplateSize($templateId);
+                $orientation = $size['width'] > $size['height'] ? 'L' : 'P';
+
+                $merged->AddPage($orientation, [$size['width'], $size['height']]);
+                $merged->useTemplate($templateId, 0, 0, $size['width'], $size['height'], true);
             }
         }
 
-        if (!$mergedOk) {
-            throw new Exception(
-                'Nessun merger PDF link-safe disponibile sul server. ' .
-                'Installare qpdf o poppler-utils/pdfunite. Dettagli: ' .
-                implode(' | ', array_filter($mergeErrors))
-            );
-        }
+        $merged->Output($outFile, 'F');
+        unset($merged);
+        $mergeMethod = 'fpdi';
     }
 
     if (!is_file($outFile) || filesize($outFile) <= 0) { throw new Exception('PDF finale non creato o vuoto.'); }
