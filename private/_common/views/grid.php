@@ -480,16 +480,31 @@ function collectDatatablePdfParams(){
     };
 }
 
-function runDatatablePdfBatch(jobId, total){
+function runDatatablePdfBatch(jobId, total, retryCount){
+    retryCount = retryCount || 0;
+
     fetch('/srv/catalog-pdf/run-datatable-pdf-job.php?job_id=' + encodeURIComponent(jobId) + '&_=' + Date.now(), {
         credentials: 'same-origin',
         cache: 'no-store'
     })
-    .then(function(response){ return response.text(); })
-    .then(function(text){
+    .then(async function(response){
+        const text = await response.text();
+        return {ok: response.ok, status: response.status, text: text};
+    })
+    .then(function(result){
         let data;
-        try { data = JSON.parse(text); }
-        catch(e){ throw new Error('Risposta non JSON dal worker:\n' + text); }
+
+        try {
+            data = JSON.parse(result.text);
+        } catch(e) {
+            const preview = (result.text || '[risposta vuota]').substring(0, 1500);
+            throw new Error('Risposta non JSON dal worker. HTTP ' + result.status + ':\n' + preview);
+        }
+
+        if(data.status === 'busy'){
+            setTimeout(function(){ runDatatablePdfBatch(jobId, total, retryCount); }, 1500);
+            return;
+        }
 
         if(!data.success && data.status === 'failed'){
             throw new Error(data.message || 'Job PDF fallito.');
@@ -505,24 +520,13 @@ function runDatatablePdfBatch(jobId, total){
             datatablePdfButton.classList.remove('btn-info');
             datatablePdfButton.classList.add('btn-success');
             datatablePdfButton.innerHTML = '<span class="far fa-file-pdf"></span> PDF pronto';
-            if(data.result_file){
 
-                /*
-                |--------------------------------------------------------------------------
-                | DOWNLOAD PDF SENZA POPUP
-                |--------------------------------------------------------------------------
-                | window.open() eseguito dopo diversi secondi viene bloccato da Chrome,
-                | perché non è più collegato direttamente al click dell'utente.
-                | Usiamo invece un link temporaneo con attributo download: non apre
-                | popup e scarica il file anche dopo una lunga generazione.
-                */
+            if(data.result_file){
                 const downloadUrl = data.result_file + '?t=' + Date.now();
                 const downloadLink = document.createElement('a');
-
                 downloadLink.href = downloadUrl;
                 downloadLink.download = '';
                 downloadLink.style.display = 'none';
-
                 document.body.appendChild(downloadLink);
                 downloadLink.click();
                 downloadLink.remove();
@@ -530,15 +534,21 @@ function runDatatablePdfBatch(jobId, total){
             return;
         }
 
-        setTimeout(function(){ runDatatablePdfBatch(jobId, realTotal); }, 700);
+        setTimeout(function(){ runDatatablePdfBatch(jobId, realTotal, 0); }, 900);
     })
     .catch(function(error){
+        if(retryCount < 2){
+            console.warn('Worker PDF: nuovo tentativo', retryCount + 1, error);
+            setTimeout(function(){ runDatatablePdfBatch(jobId, total, retryCount + 1); }, 2000);
+            return;
+        }
+
         datatablePdfRunning = false;
         datatablePdfButton.disabled = false;
         datatablePdfButton.classList.remove('btn-info','btn-success');
         datatablePdfButton.classList.add('btn-warning');
         datatablePdfButton.innerHTML = '<span class="fas fa-exclamation-triangle"></span> Errore PDF';
-        alert('Errore esportazione PDF DataTable:\n\n' + error.message);
+        alert('Errore esportazione PDF DataTable:\n\n' + error.message + '\n\nJob: ' + jobId);
         console.error(error);
     });
 }
