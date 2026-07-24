@@ -730,11 +730,282 @@ setTimeout(initArchyFixedFiltersFooter, 600);
 	
 	
     
+
+    /*
+    |--------------------------------------------------------------------------
+    | EXPORT EXCEL DATATABLE - JOB A BATCH
+    |--------------------------------------------------------------------------
+    | Recupera gli ID realmente filtrati dalla DataTable e crea un job Excel
+    | separato. Il file finale resta in assets/documents/datatable_exports.
+    */
+    let datatableExcelRunning = false;
+
+    function collectDatatableExcelParams() {
+        const dt = $('#grid_table').DataTable();
+        const columns = [];
+
+        $('#grid_table thead th[data-column]').each(function() {
+            const column = $(this).attr('data-column');
+            if (column) {
+                columns.push(column);
+            }
+        });
+
+        const orderInfo = dt.order();
+        let orderBy = columns.length ? columns[0] : '';
+        let order = 'ASC';
+
+        if (orderInfo && orderInfo.length) {
+            const index = parseInt(orderInfo[0][0], 10);
+            if (columns[index]) {
+                orderBy = columns[index];
+            }
+            order = String(orderInfo[0][1] || 'asc').toUpperCase() === 'DESC' ? 'DESC' : 'ASC';
+        }
+
+        const filters = {};
+        $('#grid_table tfoot th .export_filter').each(function() {
+            let value = $(this).val();
+            if (value === null || typeof value === 'undefined' || String(value).trim() === '') {
+                return;
+            }
+
+            let column = $(this).data('column');
+            if ($(this).attr('type') === 'radio') {
+                if (!$(this).is(':checked')) {
+                    return;
+                }
+                column = $(this).attr('name');
+            }
+
+            if (!column) {
+                return;
+            }
+
+            if ($(this).hasClass('filter_date')) {
+                const parts = String(value).split('/');
+                parts.reverse();
+                value = parts.join('-');
+            }
+
+            filters[column] = value;
+        });
+
+        return {
+            intent: intent,
+            columns: columns,
+            search: dt.search() || '',
+            filter: filters,
+            order_by: orderBy,
+            order: order
+        };
+    }
+
+    function collectAllFilteredIdsForExcel(callback) {
+        if (typeof window.collectAllFilteredIds === 'function') {
+            window.collectAllFilteredIds(callback);
+            return;
+        }
+
+        const dt = $('#grid_table').DataTable();
+        let ajaxUrl = dt.ajax.url();
+        ajaxUrl += (ajaxUrl.indexOf('?') === -1 ? '?' : '&') + 'ids_only=1';
+
+        const baseParams = dt.ajax.params() || {};
+        baseParams.ids_only = 1;
+
+        let allIds = [];
+        let start = 0;
+        const batchSize = 100;
+
+        function fetchBatch() {
+            const params = Object.assign({}, baseParams, {
+                ids_only: 1,
+                start: start,
+                length: batchSize
+            });
+
+            $.ajax({
+                url: ajaxUrl,
+                method: 'POST',
+                data: params,
+                dataType: 'json',
+                cache: false,
+                success: function(response) {
+                    let ids = [];
+
+                    if (response && Array.isArray(response.ids)) {
+                        ids = response.ids
+                            .map(function(id) {
+                                return String(id).replace(/[^0-9]/g, '').trim();
+                            })
+                            .filter(function(id) {
+                                return id && /^[0-9]+$/.test(id);
+                            });
+                    }
+
+                    allIds = allIds.concat(ids);
+                    const total = parseInt(response.recordsFiltered || response.recordsTotal || 0, 10);
+                    start += batchSize;
+
+                    if (ids.length === batchSize && (!total || start < total)) {
+                        fetchBatch();
+                        return;
+                    }
+
+                    callback(Array.from(new Set(allIds)));
+                },
+                error: function(xhr) {
+                    alert('Errore durante il recupero degli ID filtrati.\n\n' + (xhr.responseText || ''));
+                    callback([]);
+                }
+            });
+        }
+
+        fetchBatch();
+    }
+
+    function runDatatableExcelBatch(jobId, total, $btn) {
+        fetch('/srv/catalog-pdf/run-datatable-excel-job.php?job_id=' + encodeURIComponent(jobId) + '&_=' + Date.now(), {
+            credentials: 'same-origin',
+            cache: 'no-store'
+        })
+        .then(function(response) {
+            return response.text();
+        })
+        .then(function(text) {
+            let data;
+            try {
+                data = JSON.parse(text);
+            } catch (e) {
+                throw new Error('Risposta non JSON dal worker Excel:\n' + text);
+            }
+
+            if (!data.success && data.status === 'failed') {
+                throw new Error(data.message || 'Job Excel fallito.');
+            }
+
+            const progress = parseInt(data.progress || 0, 10);
+            const realTotal = parseInt(data.total || total || 0, 10);
+            const percent = realTotal > 0 ? Math.round((progress / realTotal) * 100) : 0;
+
+            $('#ajax-progress-bar').css('width', Math.max(1, percent) + '%');
+            $btn.html('<span class="fas fa-sync fa-spin"></span> Excel ' + progress + ' / ' + realTotal);
+
+            if (data.status === 'completed') {
+                datatableExcelRunning = false;
+                $btn.prop('disabled', false)
+                    .removeClass('btn-info btn-warning')
+                    .addClass('btn-success')
+                    .html('<span class="far fa-file-excel"></span> Excel pronto');
+                globalLoader.stop();
+
+                if (data.result_file) {
+                    const link = document.createElement('a');
+                    link.href = data.result_file + '?t=' + Date.now();
+                    link.download = '';
+                    link.style.display = 'none';
+                    document.body.appendChild(link);
+                    link.click();
+                    link.remove();
+                }
+                return;
+            }
+
+            setTimeout(function() {
+                runDatatableExcelBatch(jobId, realTotal, $btn);
+            }, 700);
+        })
+        .catch(function(error) {
+            datatableExcelRunning = false;
+            globalLoader.stop();
+            $btn.prop('disabled', false)
+                .removeClass('btn-info btn-success')
+                .addClass('btn-warning')
+                .html('<span class="fas fa-exclamation-triangle"></span> Errore Excel');
+            alert('Errore esportazione Excel DataTable:\n\n' + error.message);
+            console.error(error);
+        });
+    }
+
+    function startDatatableExcelJob($btn) {
+        if (datatableExcelRunning) {
+            return;
+        }
+
+        collectAllFilteredIdsForExcel(function(ids) {
+            if (!ids.length) {
+                alert('Nessun record da esportare.');
+                return;
+            }
+
+            const params = collectDatatableExcelParams();
+            if (!params.columns.length) {
+                alert('Nessuna colonna esportabile selezionata.');
+                return;
+            }
+
+            if (!confirm('Vuoi esportare in Excel ' + ids.length + ' record filtrati?')) {
+                return;
+            }
+
+            datatableExcelRunning = true;
+            globalLoader.start();
+            $btn.prop('disabled', true)
+                .removeClass('btn-success btn-warning')
+                .addClass('btn-info')
+                .html('<span class="fas fa-sync fa-spin"></span> Excel 0 / ' + ids.length);
+
+            const formData = new FormData();
+            formData.append('ids', ids.join(','));
+            formData.append('params', JSON.stringify(params));
+
+            fetch('/srv/catalog-pdf/create-datatable-excel-job.php', {
+                method: 'POST',
+                body: formData,
+                credentials: 'same-origin',
+                cache: 'no-store'
+            })
+            .then(function(response) {
+                return response.text();
+            })
+            .then(function(text) {
+                let data;
+                try {
+                    data = JSON.parse(text);
+                } catch (e) {
+                    throw new Error('Risposta non JSON dalla creazione job Excel:\n' + text);
+                }
+
+                if (!data.success) {
+                    throw new Error(data.message || 'Creazione job Excel fallita.');
+                }
+
+                runDatatableExcelBatch(data.job_id, data.total, $btn);
+            })
+            .catch(function(error) {
+                datatableExcelRunning = false;
+                globalLoader.stop();
+                $btn.prop('disabled', false)
+                    .removeClass('btn-success btn-warning')
+                    .addClass('btn-info')
+                    .html('<span class="far fa-file-excel"></span> Excel');
+                alert('Errore avvio esportazione Excel:\n\n' + error.message);
+                console.error(error);
+            });
+        });
+    }
+
     $(document).on('click', '.export', function(e) {
 
         e.preventDefault();
 
         const $btn = $(this);
+
+        if ($btn.data('format') === 'excel') {
+            startDatatableExcelJob($btn);
+            return;
+        }
 
         // 🔥 PREPARE URL (NON export diretto)
         let query = root + 'archy/app.php?intent=' + intent + '&do_action=export&';
