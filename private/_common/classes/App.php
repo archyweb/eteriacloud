@@ -1,4 +1,5 @@
 <?php
+/* ARCHY PDF FOTO INGRANDITA VERSION: 2026-07-24-0945 */
 /* ARCHY PDF BATCH NO-SPLIT-ROWS VERSION: 2026-07-22-1810 */
 /* ARCHY PDF MULTICELL LINK ANNOTATIONS VERSION: 2026-07-22-1745 */
 /* ARCHY PDF BATCH ALLEGATI CLICCABILI VERSION: 2026-07-22-1730 */
@@ -3037,6 +3038,291 @@ public function additional_fields($where)
 		$app->$format($data,$filename=$app->intent->title,$columns_labels,$columns_data);
 	}
 
+public function excel_job(&$data, $filename, &$columns_labels, &$columns_data) {
+
+    $filePath = isset($_GET['_excel_output']) ? (string)$_GET['_excel_output'] : '';
+
+    if ($filePath === '') {
+        throw new RuntimeException('Percorso output Excel mancante.');
+    }
+
+    $append = !empty($_GET['_excel_append']) && is_file($filePath);
+
+    /*
+    |--------------------------------------------------------------------------
+    | ARCHY MEDIA - FOTO UFFICIALE NELL'EXPORT EXCEL
+    |--------------------------------------------------------------------------
+    | Incorpora la miniatura solo nella colonna Foto ufficiale.
+    | Gli altri campi file/bulk_upload, compresi i materiali fotografici
+    | presenti in Documentazione, restano link cliccabili.
+    */
+    $isOfficialPhotoColumn = function($index) use ($columns_labels, $columns_data) {
+        $normalise = function($value) {
+            $value = html_entity_decode(strip_tags((string)$value), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+            return mb_strtolower(trim($value), 'UTF-8');
+        };
+
+        $label = isset($columns_labels[$index]) ? $normalise($columns_labels[$index]) : '';
+
+        if (in_array($label, ['foto ufficiale', 'foto', 'immagine', 'immagine principale', 'foto principale'], true)) {
+            return true;
+        }
+
+        $column = isset($columns_data[$index]) && is_array($columns_data[$index])
+            ? $columns_data[$index]
+            : [];
+
+        foreach (['name', 'label', 'alias'] as $key) {
+            if (empty($column[$key])) {
+                continue;
+            }
+
+            $name = $normalise($column[$key]);
+
+            if (
+                strpos($name, 'foto_ufficiale') !== false ||
+                strpos($name, 'foto ufficiale') !== false ||
+                in_array($name, ['foto', 'immagine', 'immagine_principale', 'image', 'photo'], true)
+            ) {
+                return true;
+            }
+        }
+
+        return false;
+    };
+
+    if ($append) {
+        $spreadsheet = \PhpOffice\PhpSpreadsheet\IOFactory::load($filePath);
+        $sheet = $spreadsheet->getActiveSheet();
+        $rowCount = max(2, $sheet->getHighestRow() + 1);
+    } else {
+        $spreadsheet = new Spreadsheet();
+        $sheet = $spreadsheet->getActiveSheet();
+        $sheet->freezePane('A2');
+
+        $excel_column = 'A';
+        foreach ($columns_labels as $column_title) {
+            $sheet->setCellValue($excel_column.'1', $column_title);
+            $sheet->getColumnDimension($excel_column)->setAutoSize(true);
+            $excel_column++;
+        }
+
+        $rowCount = 2;
+    }
+
+    while ($row = mysqli_fetch_row($data)) {
+
+        $excel_column = 'A';
+
+        foreach ($row as $index => $cell) {
+
+            $cellAddress = $excel_column . $rowCount;
+
+            $is_upload_column = (
+                isset($columns_data[$index]['type']) &&
+                in_array($columns_data[$index]['type'], ['file', 'bulk_upload'])
+            );
+            $is_official_photo_column = $isOfficialPhotoColumn($index);
+
+            if ($is_upload_column) {
+
+                $raw = trim((string)$cell);
+
+                if ($raw === '' || $raw === '[]' || $raw === '{}' || strtolower($raw) === 'null') {
+                    $sheet->setCellValue($cellAddress, '');
+                    $excel_column++;
+                    continue;
+                }
+
+                $decoded = json_decode($raw, true);
+
+                if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                    $items = $decoded;
+                } elseif ($this->is_serialized($raw)) {
+                    $items = unserialize($raw);
+                } else {
+                    $raw = str_replace(['<br />', '<br/>', '<br>'], "\n", $raw);
+                    $raw = trim($raw, '[]"');
+                    $items = preg_split('/\r\n|\r|\n|","|",\s*"/', $raw);
+                }
+
+                if (!is_array($items)) {
+                    $items = [$items];
+                }
+
+                $links = [];
+                $embeddedImage = false;
+                $temporaryImagePaths = [];
+
+                foreach ($items as $item) {
+                    $item = trim((string)$item);
+                    $item = trim($item, '[]"');
+
+                    if ($item === '' || $item === '[]' || $item === '{}' || strtolower($item) === 'null') {
+                        continue;
+                    }
+
+                    if (preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $item)) {
+                        $StoreCloud = new StoreCloud();
+                        $file_location = $StoreCloud->getImageDetailFromDb($item, 'file_location');
+
+                        if ($file_location == 'cloudImages') {
+                            $thumbnailUrl = $StoreCloud->getImageUrl($item, 'thumbnail');
+
+                            if ($is_official_photo_column && !$embeddedImage && $thumbnailUrl !== '') {
+                                $context = stream_context_create([
+                                    'http' => [
+                                        'timeout' => 12,
+                                        'follow_location' => 1,
+                                        'user_agent' => 'ArchyArt Excel Export'
+                                    ],
+                                    'ssl' => [
+                                        'verify_peer' => true,
+                                        'verify_peer_name' => true
+                                    ]
+                                ]);
+                                $imageData = @file_get_contents($thumbnailUrl, false, $context);
+
+                                if ($imageData !== false && strlen($imageData) > 0) {
+                                    $imageInfo = @getimagesizefromstring($imageData);
+                                    $extension = 'jpg';
+
+                                    if (is_array($imageInfo) && !empty($imageInfo['mime'])) {
+                                        if ($imageInfo['mime'] === 'image/png') {
+                                            $extension = 'png';
+                                        } elseif ($imageInfo['mime'] === 'image/gif') {
+                                            $extension = 'gif';
+                                        } elseif ($imageInfo['mime'] === 'image/webp') {
+                                            $extension = 'webp';
+                                        }
+                                    }
+
+                                    $tempBase = tempnam(sys_get_temp_dir(), 'archy_excel_img_');
+                                    if ($tempBase !== false) {
+                                        $tempImagePath = $tempBase . '.' . $extension;
+                                        @unlink($tempBase);
+
+                                        if (@file_put_contents($tempImagePath, $imageData) !== false) {
+                                            $temporaryImagePaths[] = $tempImagePath;
+
+                                            $drawing = new \PhpOffice\PhpSpreadsheet\Worksheet\Drawing();
+                                            $drawing->setName('Foto opera');
+                                            $drawing->setDescription('Miniatura Cloudflare');
+                                            $drawing->setPath($tempImagePath);
+                                            $drawing->setCoordinates($cellAddress);
+                                            $drawing->setHeight(80);
+                                            $drawing->setOffsetX(5);
+                                            $drawing->setOffsetY(5);
+                                            $drawing->setWorksheet($sheet);
+
+                                            $sheet->getRowDimension($rowCount)->setRowHeight(68);
+                                            $sheet->getColumnDimension($excel_column)->setWidth(15);
+                                            $embeddedImage = true;
+                                        }
+                                    }
+                                }
+                            }
+
+                            if (!$is_official_photo_column || !$embeddedImage) {
+                                $links[] = $StoreCloud->getImageUrl($item, 'public');
+                            }
+                            continue;
+                        }
+
+                        $StoreR2Adapter = new StoreR2Adapter();
+                        $links[] = $StoreR2Adapter->getFileUrl($item);
+                        continue;
+                    }
+
+                    if (preg_match('#^https?://#i', $item)) {
+                        $links[] = $item;
+                    } else {
+                        $basename = basename($item);
+
+                        if ($basename !== '' && $basename !== '.' && $basename !== '/') {
+                            $links[] = 'https://demo-storage.archyart.it/uploads/' . $basename;
+                        }
+                    }
+                }
+
+                $sheet->setCellValue($cellAddress, implode("\n", array_unique($links)));
+                $sheet->getStyle($cellAddress)->getAlignment()->setWrapText(true);
+
+                if (!empty($temporaryImagePaths)) {
+                    if (!isset($GLOBALS['archy_excel_temp_images']) || !is_array($GLOBALS['archy_excel_temp_images'])) {
+                        $GLOBALS['archy_excel_temp_images'] = [];
+                    }
+                    $GLOBALS['archy_excel_temp_images'] = array_merge(
+                        $GLOBALS['archy_excel_temp_images'],
+                        $temporaryImagePaths
+                    );
+                }
+
+                $excel_column++;
+                continue;
+            }
+
+            if (isset($columns_data[$index]['excel_formatter'])) {
+                $cell = $columns_data[$index]['excel_formatter']($cell, '');
+            } elseif (isset($columns_data[$index]['formatter']) && !isset($columns_data[$index]['formatter_hide_in_excel'])) {
+                $cell = $columns_data[$index]['formatter']($cell, '');
+            }
+
+            if (
+                isset($columns_data[$index]['type']) &&
+                ($columns_data[$index]['type'] == 'amount' || $columns_data[$index]['type'] == 'text')
+            ) {
+
+                if (strpos((string)$cell, "€") === false) {
+                    $sheet->setCellValue($cellAddress, $cell);
+                } else {
+                    $cell = substr($cell, 4);
+                    $cell = str_replace(".", "", $cell);
+                    $cell = str_replace(",", ".", $cell);
+
+                    $sheet->setCellValue($cellAddress, (float)$cell);
+
+                    $sheet->getStyle($cellAddress)
+                        ->getNumberFormat()
+                        ->setFormatCode('€ #,##0.00;[Red]-€ #,##0.00');
+                }
+
+            } else {
+
+    if (is_string($cell)) {
+
+        $cell = preg_replace('/<\/p>\s*<p>/i', "\n", $cell);
+        $cell = preg_replace('/<br\s*\/?>/i', "\n", $cell);
+        $cell = strip_tags($cell);
+        $cell = html_entity_decode($cell, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+    }
+
+    $sheet->setCellValue($cellAddress, $cell);
+}
+
+            $excel_column++;
+        }
+
+        $rowCount++;
+    }
+
+    $writer = new Xlsx($spreadsheet);
+    $writer->save($filePath);
+
+    if (!empty($GLOBALS['archy_excel_temp_images']) && is_array($GLOBALS['archy_excel_temp_images'])) {
+        foreach ($GLOBALS['archy_excel_temp_images'] as $tempImagePath) {
+            if (is_string($tempImagePath) && is_file($tempImagePath)) {
+                @unlink($tempImagePath);
+            }
+        }
+        $GLOBALS['archy_excel_temp_images'] = [];
+    }
+
+    $spreadsheet->disconnectWorksheets();
+    unset($writer, $spreadsheet);
+}
+
+
 public function excel(&$data, $filename, &$columns_labels, &$columns_data) {
 
     $job_id = uniqid();
@@ -4233,7 +4519,7 @@ public function excel(&$data, $filename, &$columns_labels, &$columns_data) {
                 $photoIndexes[] = $i;
             }
         }
-        $photoWidth = ($columnCount > 8) ? 13.0 : 18.0;
+        $photoWidth = ($columnCount > 8) ? 24.0 : 30.0;
         $remainingWidth = $usableWidth - (count($photoIndexes) * $photoWidth);
         $normalColumns = max(1, $columnCount - count($photoIndexes));
         $normalWidth = $remainingWidth / $normalColumns;
@@ -4247,7 +4533,7 @@ public function excel(&$data, $filename, &$columns_labels, &$columns_data) {
         $headerText  = [53, 91, 56];
         $rowOddFill  = [248, 251, 248];
         $rowEvenFill = [255, 255, 255];
-        $cellPadding = 1.0;
+        $cellPadding = 2.0;
         $lineHeight  = max(3.2, $size * 0.48);
 
         $drawTitle = function() use ($pdf, $pdfTitle, $left, $size) {
@@ -4327,7 +4613,7 @@ public function excel(&$data, $filename, &$columns_labels, &$columns_data) {
                         $src = html_entity_decode($m[1], ENT_QUOTES, 'UTF-8');
                     }
                     $prepared[$index] = ['type' => 'photo', 'src' => $src];
-                    $rowHeight = max($rowHeight, 15.0);
+                    $rowHeight = max($rowHeight, 28.0);
                 } elseif ($isAttachmentColumn($index)) {
                     $attachmentHtml = $renderAttachmentSummary($rawCell, $cell);
                     $links = [];
