@@ -947,7 +947,9 @@ private function optimizeImagesForPdfHtml($html){
 );
             $template = $this->preparePdfTemplateFonts($tcpdf, $template);
 			$css = $this->preparePdfTemplateFonts($tcpdf, $css);
-
+			if (class_exists('Normalizer')) {
+				$template = Normalizer::normalize($template, Normalizer::FORM_C);
+			}
 			$template = $this->cleanPdfHtmlBeforeWrite($template);
 			$pdf_template = '<html><head>'.$css.'</head><body>'.$template.'</body></html>';
             $tcpdf->writeHTML($pdf_template, true, false, true, false, '');
