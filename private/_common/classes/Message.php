@@ -6,7 +6,7 @@ use PHPMailer\PHPMailer\Exception;
 
 class Message{
 	
-	public $app, $db, $root, $d_root, $shortcodes, $bulk_message_chunk;
+	public $app, $db, $root, $d_root, $shortcodes, $bulk_message_chunk, $last_error;
 	
 	public function __construct(){
 		global $app;
@@ -343,18 +343,52 @@ class Message{
 	public function email($data){
 		global $app;
 		$settings=$app->get_settings($domain='notifications');
+		$this->last_error='';
 		
 		$mail = new PHPMailer();
         //$mail->CharSet = 'text/html; charset=UTF-8;';
         $mail->CharSet = 'utf-8';
         //$mail->SMTPDebug = 1;
-		//$mail->isSMTP();
-		//$mail->Host = $settings->smtp_host;					// Specify main and backup SMTP servers
-		//$mail->SMTPAuth = true;                            	// Enable SMTP authentication
-		//$mail->Username = $settings->smtp_username;        	// SMTP username
-		//$mail->Password = $settings->smtp_password;         // SMTP password
-		$mail->SMTPSecure = $settings->smtp_secure;         // Enable TLS encryption, `ssl` also accepted
-		$mail->Port = $settings->smtp_port;                 // TCP port to connect to
+		$mail_transport=strtolower(trim((string)($app->config['mail_transport'] ?? 'auto')));
+		$smtp_host=trim((string)($settings->smtp_host ?? ''));
+		$smtp_username=trim((string)($settings->smtp_username ?? ''));
+		$smtp_password=trim((string)($settings->smtp_password ?? ''));
+		$smtp_secure=trim((string)($settings->smtp_secure ?? ''));
+		$smtp_port=trim((string)($settings->smtp_port ?? ''));
+		$has_smtp_credentials=$smtp_host!='' && $smtp_username!='' && $smtp_password!='';
+		$has_smtp_secure_port=$smtp_secure!='' && $smtp_port!='';
+		$transport_used='mail';
+		
+		if($mail_transport=='sendmail' && !$has_smtp_secure_port):
+			$mail->isSendmail();
+			$transport_used='sendmail';
+		elseif($mail_transport=='smtp' || ($mail_transport=='auto' && ($has_smtp_credentials || $has_smtp_secure_port)) || (in_array($mail_transport,['mail','php_mail','sendmail']) && $has_smtp_secure_port)):
+			$mail->isSMTP();
+			$mail->Host = $smtp_host!=''? $smtp_host : 'localhost';
+			$mail->SMTPAuth = $has_smtp_credentials;
+			$mail->Username = $smtp_username;
+			$mail->Password = $smtp_password;
+			$mail->Timeout = 15;
+			$transport_used=$mail->SMTPAuth? 'smtp-auth' : 'smtp-local';
+		else:
+			$mail->isMail();
+		endif;
+		
+		if($smtp_secure!=''):
+			$mail->SMTPSecure = strtolower($smtp_secure)=='starttls'? PHPMailer::ENCRYPTION_STARTTLS : strtolower($smtp_secure);
+		endif;
+		if($smtp_port!=''):
+			$mail->Port = (int)$smtp_port;
+		endif;
+		if(!empty($app->config['mail_smtp_allow_self_signed'])):
+			$mail->SMTPOptions = [
+				'ssl' => [
+					'verify_peer' => false,
+					'verify_peer_name' => false,
+					'allow_self_signed' => true
+				]
+			];
+		endif;
 		
 		$mail->setFrom($data['sender_mail'],$data['sender_name']);
 //		$mail->setFrom('no-reply@archy.it',$data['sender_name']);
@@ -414,7 +448,12 @@ class Message{
 			endforeach;
 		endif;
 		
-		return $mail->send();
+		$sent=$mail->send();
+		if(!$sent):
+			$this->last_error=$mail->ErrorInfo.' [transport='.$transport_used.' host='.($mail->Host?:'-').' port='.($mail->Port?:'-').' secure='.($mail->SMTPSecure?:'-').' auth='.($mail->SMTPAuth? 'yes':'no').']';
+			error_log('[Message] mail failed '.$this->last_error);
+		endif;
+		return $sent;
 	}
 	
 	public function test_email_credentials($recipient_address){

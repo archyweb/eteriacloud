@@ -30,7 +30,7 @@
               <!-- LOAD NOTICES -->              
             </div>
           </div>
-          <div class="card-footer text-center border-top"><a class="card-link d-block eteria-target" href="archy/app.php?intent=archy_notices&view=grid" data-id="archy_notices">Mostra tutte</a></div>
+          <div class="card-footer text-center border-top"><a class="card-link d-block eteria-target" href="archy/app.php?view=notices" data-id="archy_notices">Mostra tutte</a></div>
         </div>
       </div>
     </li>
@@ -43,7 +43,7 @@
       </a>
       <div class="dropdown-menu dropdown-caret dropdown-menu-end py-0" aria-labelledby="navbarDropdownUser">
         <div class="bg-white dark__bg-1000 rounded-2 py-2">
-          <a class="dropdown-item fw-bold text-warning" href="#!"><span class="fas fa-crown me-1"></span><span><?php echo $app->user_full_name; ?></span></a>
+          <a class="dropdown-item fw-bold text-warning" href="#!"><span class="fas fa-crown me-1"></span><span><?php echo htmlspecialchars($app->user_full_name, ENT_QUOTES, 'UTF-8'); ?></span></a>
 
           <div class="dropdown-divider"></div>
           <a href="archy/app.php?view=password" data-id="archy_password" class="dropdown-item eteria-target">Cambio password</a>

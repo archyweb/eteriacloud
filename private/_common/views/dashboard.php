@@ -1,6 +1,58 @@
 <?php
 $u = $app->currentUser();
+$dashboard_google_calendar = [
+    'enabled' => false,
+    'apiKey' => '',
+    'calendars' => []
+];
+
+if(isset($app->config['google_calendar']) && is_array($app->config['google_calendar'])){
+    $google_calendar_config = $app->config['google_calendar'];
+    $google_calendar_api_key = trim((string)($google_calendar_config['api_key'] ?? ''));
+    $google_calendar_sources = [];
+
+    if(!empty($google_calendar_config['calendar_id'])){
+        $google_calendar_sources[] = [
+            'id' => $google_calendar_config['calendar_id'],
+            'name' => $google_calendar_config['name'] ?? 'Google Calendar',
+            'className' => $google_calendar_config['className'] ?? 'bg-info-subtle'
+        ];
+    }
+
+    if(isset($google_calendar_config['calendars']) && is_array($google_calendar_config['calendars'])){
+        foreach($google_calendar_config['calendars'] as $google_calendar_source){
+            if(is_array($google_calendar_source) && !empty($google_calendar_source['id'])){
+                $google_calendar_sources[] = [
+                    'id' => $google_calendar_source['id'],
+                    'name' => $google_calendar_source['name'] ?? 'Google Calendar',
+                    'className' => $google_calendar_source['className'] ?? 'bg-info-subtle',
+                    'color' => $google_calendar_source['color'] ?? null,
+                    'textColor' => $google_calendar_source['textColor'] ?? null
+                ];
+            }
+        }
+    }
+
+    $dashboard_google_calendar = [
+        'enabled' => !empty($google_calendar_config['enabled']) && $google_calendar_api_key !== '' && count($google_calendar_sources) > 0,
+        'apiKey' => $google_calendar_api_key,
+        'calendars' => $google_calendar_sources
+    ];
+}
+
+$dashboard_google_calendar_oauth_configured = false;
+$dashboard_google_calendar_account = null;
+
+if(class_exists('GoogleCalendarService')){
+    $dashboard_google_calendar_service = new GoogleCalendarService($app);
+    $dashboard_google_calendar_oauth_configured = $dashboard_google_calendar_service->isConfigured();
+    $dashboard_google_calendar_account = $dashboard_google_calendar_service->getAccount();
+}
 ?>
+<script>
+window.archyDashboardCalendar = window.archyDashboardCalendar || {};
+window.archyDashboardCalendar.google = <?php echo json_encode($dashboard_google_calendar, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP); ?>;
+</script>
 <div class="row mb-3">
     <div class="col">
         <div class="card bg-100 shadow-none border">
@@ -48,6 +100,17 @@ $u = $app->currentUser();
                     </div>
                     <div class="col-auto d-flex order-md-0">
                         <button class="btn btn-primary btn-sm" type="button" data-bs-toggle="modal" data-bs-target="#addEventModal"> <span class="fas fa-plus me-2"></span>Aggiungi evento</button>
+                        <?php if($dashboard_google_calendar_oauth_configured){ ?>
+                            <?php if($dashboard_google_calendar_account){ ?>
+                                <a class="btn btn-falcon-success btn-sm ms-2" href="/archy/google_calendar_disconnect.php" title="Scollega Google Calendar">
+                                    <span class="fas fa-calendar-check me-2"></span>Google collegato
+                                </a>
+                            <?php }else{ ?>
+                                <a class="btn btn-falcon-default btn-sm ms-2" href="/archy/google_calendar_connect.php">
+                                    <span class="fas fa-calendar-plus me-2"></span>Collega Google
+                                </a>
+                            <?php } ?>
+                        <?php } ?>
                     </div>
                     <div class="col d-flex justify-content-end order-md-2">
                         <div class="dropdown font-sans-serif me-md-2">
@@ -72,9 +135,9 @@ $u = $app->currentUser();
     <div class="col-lg-4">
         
         <?php if($app->options['dashboard']['notify']==true){ ?>
-        <div class="card dashboard-notify">
+        <div class="card dashboard-notify mb-3">
             <div class="card-header d-flex flex-between-center py-2 border-bottom">
-                <h6 class="mb-0">Ultime notifiche</h6>
+                <h6 class="mb-0">Notifiche per categoria</h6>
                 <div class="dropdown font-sans-serif btn-reveal-trigger">
                   <!--<button class="btn btn-link text-600 btn-sm dropdown-toggle dropdown-caret-none btn-reveal" type="button" id="dropdown-most-leads" data-bs-toggle="dropdown" data-boundary="viewport" aria-haspopup="true" aria-expanded="false"><span class="fas fa-ellipsis-h fs-11"></span></button>
                   <div class="dropdown-menu dropdown-menu-end border py-2" aria-labelledby="dropdown-most-leads"><a class="dropdown-item" href="#!">View</a><a class="dropdown-item" href="#!">Export</a>
@@ -82,14 +145,15 @@ $u = $app->currentUser();
                   </div>-->
                 </div>
             </div>
-            <div class="card-body d-flex flex-column justify-content-between">
-                <div class="row align-items-center">
+            <div class="card-body dashboard-notices-categories">
                     <?php
                     $notice = new Notice();
-                    $notice_response = $notice->html();
+                    $notice_response = $notice->dashboard_html(6);
                     echo $notice_response->html;
                     ?>
-                </div>
+            </div>
+            <div class="card-footer text-center border-top">
+                <a class="card-link d-block eteria-target" href="app.php?view=notices" data-id="archy_notices">Guarda tutte le notifiche</a>
             </div>
         </div>
         <?php } ?>
@@ -236,6 +300,3 @@ $acube=new Acube();
 //$acube->dump(json_decode('{"notification":{"uuid":"de442a5b-70a0-446f-bfa0-4dc29efbc02b","invoice_uuid":"6300838e-1972-11e9-a552-021240aba4cc","created_at":"2019-01-16T10:52:34+00:00","type":"NS","message":{"identificativo_sdi":"111","nome_file":"IT01234567890_11111.xml.p7m","data_ora_ricezione":"2013-06-06T12:00:00+00:00","riferimento_archivio":{"identificativo_sdi":"100","nome_file":"IT01234567890_11111.zip"},"lista_errori":{"Errore":{"Codice":"00100","Descrizione":"Certificato di firma scaduto"}},"message_id":"123456","note":"Note"},"downloaded":false},"invoice":{"fattura_elettronica_header":{"dati_trasmissione":{"id_trasmittente":{"id_paese":"IT","id_codice":"10442360961"},"progressivo_invio":"02N7B","formato_trasmissione":"FPR12","codice_destinatario":"0000000","contatti_trasmittente":{"telefono":"0287176004","email":"info@acubeapi.com"},"pec_destinatario":"movieweb@ergopec.it"},"cedente_prestatore":{"dati_anagrafici":{"id_fiscale_iva":{"id_paese":"IT","id_codice":"10144440962"},"codice_fiscale":"10144440962","anagrafica":{"denominazione":"Archy Media Srl"},"regime_fiscale":"RF01"},"sede":{"indirizzo":"Via San Vito, 18","cap":"20123","comune":"Milano","provincia":"MI","nazione":"IT"},"contatti":{"telefono":"0272080602","email":"amministrazione@archymedia.it"},"riferimento_amministrazione":"dev-31"},"cessionario_committente":{"dati_anagrafici":{"id_fiscale_iva":{"id_paese":"IT","id_codice":"09334360964"},"codice_fiscale":"DRSNDR79E16F205R","anagrafica":{"denominazione":"Movie & Web di Andrea De Rose"}},"sede":{"indirizzo":"Via Senigallia, 7","cap":"20161","comune":"Milano","provincia":"MI","nazione":"IT"}}},"fattura_elettronica_body":[{"dati_generali":{"dati_generali_documento":{"tipo_documento":"TD01","divisa":"EUR","data":"2019-01-09T00:00:00+00:00","numero":"1","importo_totale_documento":"2440.00"}},"dati_beni_servizi":{"dettaglio_linee":[{"numero_linea":1,"descrizione":"test xml sdi","quantita":"1.00","unita_misura":"PZ","prezzo_unitario":"1000.00","prezzo_totale":"1000.00","aliquota_iva":"22.00"},{"numero_linea":2,"descrizione":"test xml sdi #2","quantita":"2.00","unita_misura":"PZ","prezzo_unitario":"500.00","prezzo_totale":"1000.00","aliquota_iva":"22.00"}],"dati_riepilogo":[{"aliquota_iva":"22.00","imponibile_importo":"2000.00","imposta":"440.00","esigibilita_iva":"I"}]}}]}}'));
 
 ?>
-
-
-

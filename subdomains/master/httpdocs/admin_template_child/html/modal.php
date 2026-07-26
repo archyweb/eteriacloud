@@ -20,6 +20,29 @@
         <div class="modal-content border"></div>
     </div>
 </div>
+
+<!-- MODAL NOTICE DETAILS -->
+<div class="modal fade" id="noticeDetailModal" tabindex="-1" aria-labelledby="noticeDetailModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-lg modal-dialog-scrollable">
+        <div class="modal-content position-relative">
+            <div class="position-absolute top-0 end-0 mt-2 me-2 z-1">
+                <button class="btn-close btn btn-sm btn-circle d-flex flex-center transition-base" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body p-0">
+                <div class="rounded-top-3 py-3 ps-4 pe-6 bg-body-tertiary">
+                    <h4 class="mb-1" id="noticeDetailModalLabel">Dettaglio notifica</h4>
+                </div>
+                <div class="p-4 pb-4 notice-detail-content">
+                    <p class="text-600 mb-0">Caricamento...</p>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-falcon-default" id="noticeDetailToggleSeen" data-notice_id="">Segna letta</button>
+                <button type="button" class="btn btn-default" data-bs-dismiss="modal">Chiudi</button>
+            </div>
+        </div>
+    </div>
+</div>
         
 <!-- MODAL CALENDAR ADD NEW EVENTS -->
 <div class="modal fade" id="addEventModal" tabindex="-1">
@@ -154,7 +177,7 @@
     </div>
 </div>
 
-<?php if(isset($_GET['view']) && $_GET['view']=='grid'){ ?>
+<?php if(isset($_GET['view']) && $_GET['view']=='grid' && isset($app->intent) && is_object($app->intent)){ ?>
 <!-- MODAL COLUMNS SELECT -->
 <div class="modal fade" id="columnsModal" tabindex="-1" role="dialog" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered modal-xl modal-dialog-scrollable" role="document">  

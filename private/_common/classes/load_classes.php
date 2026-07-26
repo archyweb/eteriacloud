@@ -2,6 +2,8 @@
 
 $physical_path=dirname(__FILE__);
 
+require_once $physical_path.'/ArchyEnv.php';
+
 /* Auth classes */
 require_once $physical_path.'/zxcvbn-php/Feedback.php';
 require_once $physical_path.'/zxcvbn-php/Scorer.php';
@@ -51,6 +53,7 @@ require_once $physical_path.'/Message.php';
 require_once $physical_path.'/Membership.php';
 require_once $physical_path.'/Report.php';
 require_once $physical_path.'/Calendar.php';
+require_once $physical_path.'/GoogleCalendarService.php';
 require_once $physical_path.'/Budget.php';
 require_once $physical_path.'/Notice.php';
 require_once $physical_path.'/Firm.php';
