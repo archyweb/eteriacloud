@@ -13,7 +13,8 @@ if(isset($_GET['do'])){
         echo $calendar->get();
     }elseif($_GET['do']=='add'){
         //print_r($_POST);
-        $calendar->add($_POST);
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode(['id' => $calendar->add($_POST)]);
     }
     
 }

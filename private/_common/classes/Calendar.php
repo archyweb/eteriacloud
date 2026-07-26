@@ -20,7 +20,14 @@ class Calendar{
 			values 
 			('".$event_details['start']."','".$event_details['end']."','".addslashes($event_details['title'])."','".addslashes($event_details['description'])."','".$event_details['allDay']."','".$event_details['className']."')
 		");
-		return $this->db->insert_id;
+		$calendar_id = $this->db->insert_id;
+
+		if(class_exists('GoogleCalendarService')){
+			$google_calendar = new GoogleCalendarService($this->app);
+			$google_calendar->createEventForCalendarRecord($calendar_id, $event_details);
+		}
+
+		return $calendar_id;
 	}
 	
 	/*public function print_month($month){
