@@ -116,7 +116,7 @@ $loginMode = isset($login_mode) ? $login_mode : 'login';
                           
                           <!--/.bg-holder-->
 
-                              <div class="p-3 position-absolute top-50 start-50 translate-middle"><img src="/admin_template_child/img/logo/white-logo.jpeg" class="img-fluid"></div>
+                              <div class="p-3 position-absolute top-50 start-50 translate-middle"><img src="/admin_template_child/img/logo_archy_art_white.png" class="img-fluid"></div>
                           
                         </div>
                    <!--     <div class="mt-3 mb-4 mt-md-4 mb-md-5" data-bs-theme="light">
