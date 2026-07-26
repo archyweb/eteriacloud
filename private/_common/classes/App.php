@@ -287,7 +287,19 @@ public $user_id;
                     return $matches[0];
                 }
 
-                return rawurlencode((string) $this->config[$key]);
+                $value = (string) $this->config[$key];
+
+                if ($value === '') {
+                    if (!class_exists('ArchyEnv') && is_file(__DIR__ . '/ArchyEnv.php')) {
+                        require_once __DIR__ . '/ArchyEnv.php';
+                    }
+
+                    if (class_exists('ArchyEnv')) {
+                        $value = ArchyEnv::value(strtoupper($key), '');
+                    }
+                }
+
+                return rawurlencode($value);
             }, $href);
         }
         

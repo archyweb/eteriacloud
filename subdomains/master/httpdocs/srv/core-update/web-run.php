@@ -62,19 +62,50 @@ $configPath = $subdomain_root . '/config-local.php';
 $config = is_file($configPath) ? require $configPath : array();
 $expectedToken = isset($config['core_update_web_token']) ? trim((string) $config['core_update_web_token']) : '';
 $requestToken = isset($_GET['token']) ? trim((string) $_GET['token']) : '';
+$debugEnv = isset($_GET['debug_env']) && $_GET['debug_env'] === '1';
+
+function core_update_token_debug($mainRoot, $configPath, $expectedToken, $requestToken)
+{
+    $debug = array(
+        'config_path' => $configPath,
+        'config_readable' => is_readable($configPath),
+        'expected_token_length' => strlen((string) $expectedToken),
+        'expected_token_fingerprint' => $expectedToken !== '' ? substr(hash('sha256', (string) $expectedToken), 0, 12) : '',
+        'request_token_length' => strlen((string) $requestToken),
+        'request_token_fingerprint' => $requestToken !== '' ? substr(hash('sha256', (string) $requestToken), 0, 12) : '',
+    );
+
+    $archyEnvPath = $mainRoot . '/private/_common/classes/ArchyEnv.php';
+    if (is_file($archyEnvPath)) {
+        require_once $archyEnvPath;
+        if (class_exists('ArchyEnv')) {
+            $debug['env'] = ArchyEnv::diagnostics('CORE_UPDATE_WEB_TOKEN');
+        }
+    }
+
+    return $debug;
+}
 
 if ($expectedToken === '') {
-    core_update_web_response(403, array(
+    $payload = array(
         'status' => 'error',
         'message' => 'Token web aggiornamenti non configurato.',
-    ));
+    );
+    if ($debugEnv) {
+        $payload['debug_env'] = core_update_token_debug($main_root, $configPath, $expectedToken, $requestToken);
+    }
+    core_update_web_response(403, $payload);
 }
 
 if (!hash_equals($expectedToken, $requestToken)) {
-    core_update_web_response(403, array(
+    $payload = array(
         'status' => 'error',
         'message' => 'Token non valido.',
-    ));
+    );
+    if ($debugEnv) {
+        $payload['debug_env'] = core_update_token_debug($main_root, $configPath, $expectedToken, $requestToken);
+    }
+    core_update_web_response(403, $payload);
 }
 
 core_update_web_log($main_root, 'Avvio web-run dry_run=' . (isset($_GET['dry_run']) ? $_GET['dry_run'] : 'default'));

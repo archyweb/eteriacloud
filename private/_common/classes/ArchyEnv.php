@@ -37,6 +37,13 @@ class ArchyEnv
             return self::$env;
         }
 
+        self::$env = self::readEnvFiles(self::paths());
+
+        return self::$env;
+    }
+
+    public static function paths()
+    {
         $commonRoot = dirname(__DIR__);
         $mainRoot = dirname(dirname(dirname(__DIR__)));
         $envPaths = array(
@@ -48,9 +55,52 @@ class ArchyEnv
             $envPaths[] = rtrim($_SERVER['DOCUMENT_ROOT'], '/\\') . '/.env';
         }
 
-        self::$env = self::readEnvFiles(array_values(array_unique($envPaths)));
+        return array_values(array_unique($envPaths));
+    }
 
-        return self::$env;
+    public static function diagnostics($key)
+    {
+        $env = self::load();
+        $value = self::value($key, '');
+        $paths = array();
+
+        foreach (self::paths() as $path) {
+            $paths[] = array(
+                'path' => $path,
+                'exists' => file_exists($path),
+                'readable' => is_readable($path),
+                'contains_key' => is_readable($path) ? self::fileContainsKey($path, $key) : false,
+            );
+        }
+
+        return array(
+            'key' => $key,
+            'loaded_from_env_array' => isset($env[$key]) && $env[$key] !== '',
+            'loaded' => $value !== '',
+            'length' => strlen((string) $value),
+            'fingerprint' => $value !== '' ? substr(hash('sha256', (string) $value), 0, 12) : '',
+            'paths' => $paths,
+        );
+    }
+
+    protected static function fileContainsKey($path, $key)
+    {
+        foreach (file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $line) {
+            $line = trim($line);
+            if ($line === '' || strpos($line, '#') === 0 || strpos($line, '=') === false) {
+                continue;
+            }
+
+            list($lineKey) = explode('=', $line, 2);
+            $lineKey = preg_replace('/^\xEF\xBB\xBF/', '', trim($lineKey));
+            $lineKey = preg_replace('/^export\s+/', '', $lineKey);
+
+            if ($lineKey === $key) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     protected static function readEnvFiles($envPaths)
