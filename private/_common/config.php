@@ -31,7 +31,7 @@ return [
     ],
     'dashboard' => [
         'calendar' => true,
-        'notify' => false,
+        'notify' => true,
         'stats' => true
     ]
     
