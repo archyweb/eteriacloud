@@ -68,14 +68,7 @@ return [
                     'id' => 'archy_countries',
                     'condition' => 2, // super admin
                     'enabled' => true
-                ],
-                ['divider' => true],         
-                [
-                    'text' => 'Customer Care',
-                    'href' => 'archy/app.php?view=customer_care&domain=global',
-                    'id' => 'archy_support',
-                    'enabled' => true
-                ]          
+                ]        
             ]
         ],
         'association' => [
