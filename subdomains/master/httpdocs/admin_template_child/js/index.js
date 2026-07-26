@@ -448,7 +448,7 @@ sync_mobile_tabs();
 function fetch_notices(){
 	$.ajax({
 		type: "POST",
-		url: "archy/app.php?do_action=fetch_notices",
+		url: "/archy/app.php?do_action=fetch_notices",
 		data: '',
 		dataType: 'json',
 		cache: false,
@@ -470,12 +470,71 @@ setInterval(fetch_notices,interval_minutes*60000);
 $('#mark_notices_as_read').click(function(){
 	$.ajax({
 		type: "POST",
-		url: "archy/app.php?do_action=mark_notices_as_read",
+		url: "/archy/app.php?do_action=mark_notices_as_read",
 		data: '',
 		cache: false,
 		success: function(notices){
-			$('#notices .notices_items .list-group-item a.notification-unread').removeClass('notification-unread');
-			$('#notices_count').fadeOut();
+			fetch_notices();
+		}
+	});
+});
+
+$('body').on('click', '.toggle-notice-seen', function(){
+	var id=$(this).data('notice_id');
+	$.ajax({
+		type: "POST",
+		url: "/archy/app.php?do_action=toggle_notice_seen",
+		data: 'id='+id,
+		cache: false,
+		success: function(){
+			fetch_notices();
+		}
+	});
+});
+
+function open_notice_detail(id){
+	$('#noticeDetailModalLabel').text('Dettaglio notifica');
+	$('#noticeDetailModal .notice-detail-content').html('<p class="text-600 mb-0">Caricamento...</p>');
+	$('#noticeDetailToggleSeen').attr('data-notice_id', id).prop('disabled', true);
+	if(window.bootstrap && document.getElementById('noticeDetailModal')){
+		bootstrap.Modal.getOrCreateInstance(document.getElementById('noticeDetailModal')).show();
+	}else{
+		$('#noticeDetailModal').modal('show');
+	}
+	$.ajax({
+		type: "POST",
+		url: "/archy/app.php?do_action=get_notice_detail",
+		data: 'id='+id,
+		dataType: 'json',
+		cache: false,
+		success: function(notice){
+			$('#noticeDetailModalLabel').text(notice.title || 'Dettaglio notifica');
+			$('#noticeDetailModal .notice-detail-content').html(notice.html);
+			$('#noticeDetailToggleSeen')
+				.text(notice.toggle_label || 'Cambia stato')
+				.attr('data-notice_id', id)
+				.prop('disabled', false);
+		}
+	});
+}
+
+$('body').on('click', '.dashboard-notice-content, #notices .notice-detail-trigger, .notice-page-detail', function(e){
+	e.preventDefault();
+	e.stopPropagation();
+	var id=$(this).data('notice_id');
+	open_notice_detail(id);
+});
+
+$('#noticeDetailToggleSeen').click(function(){
+	var id=$(this).attr('data-notice_id');
+	$.ajax({
+		type: "POST",
+		url: "/archy/app.php?do_action=toggle_notice_seen",
+		data: 'id='+id,
+		cache: false,
+		success: function(){
+			fetch_notices();
+			open_notice_detail(id);
 		}
 	});
 });
@@ -489,11 +548,11 @@ function mark_as_read(id){
 	}
 	$.ajax({
 		type: "POST",
-		url: "archy/app.php?do_action=mark_notice_as_read",
+		url: "/archy/app.php?do_action=mark_notice_as_read",
 		data: 'id='+id,
 		cache: false,
 		success: function(notices){
-			$('#notices .notices_items .list-group-item a[data-notice_id="'+id+'"]').removeClass('notification-unread');
+			fetch_notices();
 		}
 	});
 }

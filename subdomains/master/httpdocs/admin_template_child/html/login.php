@@ -116,7 +116,7 @@ $loginMode = isset($login_mode) ? $login_mode : 'login';
                           
                           <!--/.bg-holder-->
 
-                              <div class="p-3 position-absolute top-50 start-50 translate-middle"><img src="/admin_template_child/img/logo_archy_art_white.png" class="img-fluid"></div>
+                              <div class="p-3 position-absolute top-50 start-50 translate-middle"><img src="/admin_template_child/img/logo/white-logo.jpeg" class="img-fluid"></div>
                           
                         </div>
                    <!--     <div class="mt-3 mb-4 mt-md-4 mb-md-5" data-bs-theme="light">
@@ -132,6 +132,7 @@ $loginMode = isset($login_mode) ? $login_mode : 'login';
                                 $loginTitles = [
                                   'forgot_password' => 'Password dimenticata',
                                   'reset_password' => 'Reimposta password',
+                                  'login_otp' => 'Codice di accesso',
                                   'login' => 'Account Login'
                                 ];
                               ?>
@@ -190,6 +191,25 @@ $loginMode = isset($login_mode) ? $login_mode : 'login';
                                 <a class="fs-10" href="/archy/login.php">Torna al login</a>
                               </div>
                             </form>
+                          <?php elseif ($loginMode === 'login_otp'): ?>
+                            <form name="login-otp-form" method="post" id="login-otp-form">
+                              <input type="hidden" name="form_action" value="login_otp">
+                              <input type="hidden" name="otp_token" value="<?php echo htmlspecialchars($login_otp_token ?? '', ENT_QUOTES, 'UTF-8'); ?>">
+                              <input type="hidden" name="otp_email" value="<?php echo htmlspecialchars($login_otp_email ?? '', ENT_QUOTES, 'UTF-8'); ?>">
+                              <div class="mb-3">
+                                <label class="form-label" for="otp-code">Codice ricevuto via email</label>
+                                <input class="form-control" id="otp-code" name="otp_code" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required autofocus/>
+                              </div>
+                              <div class="mb-3">
+                                <button class="btn btn-primary d-block w-100 mt-3" type="submit">Verifica codice</button>
+                                <?php if (!empty($login_otp_message)): ?>
+                                  <div class="<?php echo !empty($login_otp_success) ? 'alert alert-success' : 'error'; ?> mt-2" style="padding:6px;"><?php echo htmlspecialchars($login_otp_message, ENT_QUOTES, 'UTF-8'); ?></div>
+                                <?php endif; ?>
+                              </div>
+                              <div class="text-center">
+                                <a class="fs-10" href="/archy/login.php">Torna al login</a>
+                              </div>
+                            </form>
                           <?php else: ?>
                             <form name="login-form" method="post">
                               <input type="hidden" name="form_action" value="login">
@@ -230,7 +250,7 @@ $loginMode = isset($login_mode) ? $login_mode : 'login';
                                 <?php endif; ?>
                               </div>
                               <div class="text-center">
-                                <!--<a class="fs-10" href="/archy/login.php?mode=forgot-password">Password dimenticata</a>-->
+                                <a class="fs-10" href="/archy/login.php?mode=forgot-password">Password dimenticata</a>
                               </div>
                             </form>
                           <?php endif; ?>

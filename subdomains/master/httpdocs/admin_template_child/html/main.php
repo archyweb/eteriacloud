@@ -51,6 +51,7 @@
     </div>        
   </div>
 </main>
+<?php include_once $child_template_root . '/html/modal.php'; ?>
 <!-- ===============================================-->
 <!--    End of Main Content-->
 <!-- ===============================================-->

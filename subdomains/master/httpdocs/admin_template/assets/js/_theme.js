@@ -5343,7 +5343,38 @@ var appCalendarInit = function appCalendarInit() {
   var addEventModal = document.querySelector(Selectors.ADD_EVENT_MODAL);
   var eventDetailsModal = document.querySelector(Selectors.EVENT_DETAILS_MODAL);
   if (appCalendar) {
-    var calendarHeight = Math.max(520, window.innerHeight - 170);
+
+var calendarHeight = 680;
+var googleCalendar = window.archyDashboardCalendar && window.archyDashboardCalendar.google ? window.archyDashboardCalendar.google : null;
+var calendarEventSources = [{
+  id: 'archy-calendar',
+  url: '/archy/get_calendar.php?do=get'
+}];
+
+if (googleCalendar && googleCalendar.enabled && googleCalendar.apiKey && Array.isArray(googleCalendar.calendars)) {
+  googleCalendar.calendars.forEach(function (googleCalendarSource) {
+    if (!googleCalendarSource || !googleCalendarSource.id) {
+      return;
+    }
+
+    var eventSource = {
+      id: googleCalendarSource.name || googleCalendarSource.id,
+      googleCalendarId: googleCalendarSource.id,
+      googleCalendarApiKey: googleCalendar.apiKey,
+      className: googleCalendarSource.className || 'bg-info-subtle'
+    };
+
+    if (googleCalendarSource.color) {
+      eventSource.color = googleCalendarSource.color;
+    }
+
+    if (googleCalendarSource.textColor) {
+      eventSource.textColor = googleCalendarSource.textColor;
+    }
+
+    calendarEventSources.push(eventSource);
+  });
+}
 
 var calendar = renderCalendar(appCalendar, {
   headerToolbar: false,
@@ -5364,7 +5395,7 @@ var calendar = renderCalendar(appCalendar, {
             second: '2-digit',
             meridiem: false
           },
-      events: '/archy/get_calendar.php?do=get',
+      eventSources: calendarEventSources,
       eventClick: function eventClick(info) {
         if (info.event.url) {
           window.open(info.event.url, '_blank');

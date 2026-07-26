@@ -2306,3 +2306,133 @@ $(document).on('click', 'a[href*="logout"], a[href*="do_action=logout"], .logout
         }
     });
 });
+
+$(document).on('click', 'a.eteria-target', function(e) {
+    if (window.parent === window || !window.parent.$) {
+        return;
+    }
+
+    var dataId = $(this).data('id');
+    if (!dataId) {
+        return;
+    }
+
+    var parentLink = window.parent.$('a.eteria-target[data-id="' + dataId + '"]').first();
+    if (!parentLink.length) {
+        return;
+    }
+
+    e.preventDefault();
+
+    var href = $(this).attr('href') || parentLink.attr('href');
+    if (href.indexOf('app.php') === 0) {
+        href = 'archy/' + href;
+    } else if (href.indexOf('/archy/') === 0) {
+        href = href.substring(1);
+    }
+
+    parentLink.attr('href', href);
+    parentLink.trigger('click');
+});
+
+$(document).on('click', 'a.ticket-frame-link', function(e) {
+    var href = $(this).attr('href');
+    if (!href) {
+        return;
+    }
+
+    e.preventDefault();
+    window.location.href = href;
+});
+
+function archyRefreshDashboardNotices(callback) {
+    if (!$('.dashboard-notices-categories').length) {
+        if (typeof callback === 'function') callback();
+        return;
+    }
+
+    $.ajax({
+        type: 'POST',
+        url: '/archy/app.php?do_action=fetch_dashboard_notices',
+        data: '',
+        dataType: 'json',
+        cache: false,
+        success: function(notices) {
+            $('.dashboard-notices-categories').html(notices.html);
+
+            if (typeof callback === 'function') callback();
+        }
+    });
+}
+
+function archyOpenNoticeDetail(id) {
+    var modalElement = document.getElementById('noticeDetailModal');
+    if (!modalElement) return;
+
+    $('#noticeDetailModalLabel').text('Dettaglio notifica');
+    $('#noticeDetailModal .notice-detail-content').html('<p class="text-600 mb-0">Caricamento...</p>');
+    $('#noticeDetailToggleSeen').attr('data-notice_id', id).prop('disabled', true);
+
+    if (window.bootstrap && bootstrap.Modal) {
+        bootstrap.Modal.getOrCreateInstance(modalElement).show();
+    } else if ($.fn.modal) {
+        $('#noticeDetailModal').modal('show');
+    }
+
+    $.ajax({
+        type: 'POST',
+        url: '/archy/app.php?do_action=get_notice_detail',
+        data: 'id=' + encodeURIComponent(id),
+        dataType: 'json',
+        cache: false,
+        success: function(notice) {
+            $('#noticeDetailModalLabel').text(notice.title || 'Dettaglio notifica');
+            $('#noticeDetailModal .notice-detail-content').html(notice.html);
+            $('#noticeDetailToggleSeen')
+                .text(notice.toggle_label || 'Cambia stato')
+                .attr('data-notice_id', id)
+                .prop('disabled', false);
+        }
+    });
+}
+
+$(document).on('click', '.dashboard-notice-content, .notice-page-detail', function() {
+    archyOpenNoticeDetail($(this).data('notice_id'));
+});
+
+$(document).on('click', '.toggle-notice-seen', function() {
+    var id = $(this).data('notice_id');
+
+    $.ajax({
+        type: 'POST',
+        url: '/archy/app.php?do_action=toggle_notice_seen',
+        data: 'id=' + encodeURIComponent(id),
+        cache: false,
+        success: function() {
+            archyRefreshDashboardNotices();
+        }
+    });
+});
+
+$(document).on('click', '#noticeDetailToggleSeen', function() {
+    var id = $(this).attr('data-notice_id');
+
+    $.ajax({
+        type: 'POST',
+        url: '/archy/app.php?do_action=toggle_notice_seen',
+        data: 'id=' + encodeURIComponent(id),
+        cache: false,
+        success: function() {
+            archyRefreshDashboardNotices(function() {
+                archyOpenNoticeDetail(id);
+            });
+        }
+    });
+});
+
+$(function() {
+    if ($('.dashboard-notices-categories').length) {
+        archyRefreshDashboardNotices();
+        setInterval(archyRefreshDashboardNotices, 120000);
+    }
+});
