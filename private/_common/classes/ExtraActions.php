@@ -42,6 +42,20 @@ class ExtraActions{
     public function init_auth() {
         $dbh = new PDO("mysql:host=" . $this->config['db']['host'] . ";dbname=" . $this->config['db']['name'], $this->config['db']['user'], $this->config['db']['pass']);
         $auth_config = new PHPAuth\Config($dbh);
+        $auth_dictionary = [];
+        $auth_language_file = $this->main_root.'/private/_common/libs/PHPAuth/languages/it_IT.php';
+        if (is_readable($auth_language_file)) {
+            $auth_dictionary = include $auth_language_file;
+        }
+        foreach ($auth_dictionary as $auth_key => $auth_message) {
+            if (is_string($auth_message)) {
+                $auth_dictionary[$auth_key] = html_entity_decode($auth_message, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+            }
+        }
+        $auth_dictionary['email_reset_subject'] = '%s - Reimpostazione password';
+        $auth_dictionary['email_reset_body'] = 'Ciao,<br/><br/>abbiamo ricevuto una richiesta di reimpostazione della password per il tuo account.<br/><br/>Per scegliere una nuova password clicca sul seguente link:<br/><br/><strong><a href="%1$s/%2$s">%1$s/%2$s</a></strong><br/><br/>Quando richiesto, inserisci questo codice di verifica: <strong>%3$s</strong><br/><br/>Se non hai richiesto tu la reimpostazione della password, puoi ignorare questa email.';
+        $auth_dictionary['email_reset_altbody'] = 'Ciao,' . "\n\n" . 'abbiamo ricevuto una richiesta di reimpostazione della password per il tuo account.' . "\n\n" . 'Per scegliere una nuova password apri questo link:' . "\n" . '%1$s/%2$s' . "\n\n" . 'Quando richiesto, inserisci questo codice di verifica: %3$s' . "\n\n" . 'Se non hai richiesto tu la reimpostazione della password, puoi ignorare questa email.';
+        $auth_config->setLocalization($auth_dictionary);
         $rootUrl = rtrim($this->config['root_url'] ?? $this->protocol . '://' . $_SERVER['HTTP_HOST'], '/');
         $auth_config->config['site_url'] = $rootUrl;
         $auth_config->config['site_name'] = $this->config['customer_name'] ?? 'Archy Art';

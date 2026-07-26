@@ -8,6 +8,7 @@
     $forgot_password_email = '';
     $reset_password_message = '';
     $reset_password_success = false;
+    $reset_password_redirect = false;
     $reset_password_token = $_GET['token'] ?? '';
     $login_otp_message = '';
     $login_otp_success = false;
@@ -59,7 +60,10 @@
                     $_POST['new_password_repeat'] ?? ''
                 );
                 $reset_password_success = empty($reset['error']);
-                $reset_password_message = $reset['message'];
+                $reset_password_redirect = $reset_password_success;
+                $reset_password_message = $reset_password_success
+                    ? 'Password reimpostata correttamente. A breve verrai reindirizzato alla pagina di login.'
+                    : $reset['message'];
             } elseif ($form_action === 'login_otp') {
                 $login_mode = 'login_otp';
                 $login_otp_token = $_POST['otp_token'] ?? '';

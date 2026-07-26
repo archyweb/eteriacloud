@@ -157,40 +157,47 @@ $loginMode = isset($login_mode) ? $login_mode : 'login';
                               </div>
                             </form>
                           <?php elseif ($loginMode === 'reset_password'): ?>
-                            <form name="reset-password-form" method="post" id="change-password-form">
-                              <input type="hidden" name="form_action" value="reset_password">
-                              <div class="mb-3">
-                                <label class="form-label" for="reset-token">Codice reset</label>
-                                <input class="form-control" id="reset-token" name="reset_token" type="text" value="<?php echo htmlspecialchars($reset_password_token ?? '', ENT_QUOTES, 'UTF-8'); ?>" required/>
-                              </div>
-                              <input id="old-password" type="hidden" value=""/>
-                              <div class="mb-3">
-                                <label class="form-label" for="new-password">Nuova password</label>
-                                <input class="form-control" id="new-password" name="new_password" type="password" autocomplete="new-password" required/>
-                              </div>
-                              <div class="mb-3">
-                                <label class="form-label" for="new-password-repeat">Ripeti nuova password</label>
-                                <input class="form-control" id="new-password-repeat" name="new_password_repeat" type="password" autocomplete="new-password" required/>
-                              </div>
-                              <ul class="list-unstyled fs-10 mb-3" id="password-rules">
-                                <li data-rule="length">Almeno 12 caratteri</li>
-                                <li data-rule="lowercase">Almeno una lettera minuscola</li>
-                                <li data-rule="uppercase">Almeno una lettera maiuscola</li>
-                                <li data-rule="number">Almeno un numero</li>
-                                <li data-rule="special">Almeno un carattere speciale</li>
-                                <li data-rule="spaces">Nessuno spazio</li>
-                                <li data-rule="match">Le password coincidono</li>
-                              </ul>
-                              <div class="mb-3">
-                                <button class="btn btn-primary d-block w-100 mt-3" type="submit" id="change-password-btn" disabled>Reimposta password</button>
-                                <?php if (!empty($reset_password_message)): ?>
-                                  <div class="<?php echo !empty($reset_password_success) ? 'alert alert-success' : 'error'; ?> mt-2" style="padding:6px;"><?php echo htmlspecialchars($reset_password_message, ENT_QUOTES, 'UTF-8'); ?></div>
-                                <?php endif; ?>
-                              </div>
+                            <?php if (!empty($reset_password_success)): ?>
+                              <div class="alert alert-success mt-2" style="padding:6px;"><?php echo htmlspecialchars($reset_password_message, ENT_QUOTES, 'UTF-8'); ?></div>
                               <div class="text-center">
                                 <a class="fs-10" href="/archy/login.php">Torna al login</a>
                               </div>
-                            </form>
+                            <?php else: ?>
+                              <form name="reset-password-form" method="post" id="change-password-form">
+                                <input type="hidden" name="form_action" value="reset_password">
+                                <div class="mb-3">
+                                  <label class="form-label" for="reset-token">Codice reset</label>
+                                  <input class="form-control" id="reset-token" name="reset_token" type="text" value="<?php echo htmlspecialchars($reset_password_token ?? '', ENT_QUOTES, 'UTF-8'); ?>" required/>
+                                </div>
+                                <input id="old-password" type="hidden" value=""/>
+                                <div class="mb-3">
+                                  <label class="form-label" for="new-password">Nuova password</label>
+                                  <input class="form-control" id="new-password" name="new_password" type="password" autocomplete="new-password" required/>
+                                </div>
+                                <div class="mb-3">
+                                  <label class="form-label" for="new-password-repeat">Ripeti nuova password</label>
+                                  <input class="form-control" id="new-password-repeat" name="new_password_repeat" type="password" autocomplete="new-password" required/>
+                                </div>
+                                <ul class="list-unstyled fs-10 mb-3" id="password-rules">
+                                  <li data-rule="length">Almeno 12 caratteri</li>
+                                  <li data-rule="lowercase">Almeno una lettera minuscola</li>
+                                  <li data-rule="uppercase">Almeno una lettera maiuscola</li>
+                                  <li data-rule="number">Almeno un numero</li>
+                                  <li data-rule="special">Almeno un carattere speciale</li>
+                                  <li data-rule="spaces">Nessuno spazio</li>
+                                  <li data-rule="match">Le password coincidono</li>
+                                </ul>
+                                <div class="mb-3">
+                                  <button class="btn btn-primary d-block w-100 mt-3" type="submit" id="change-password-btn" disabled>Reimposta password</button>
+                                  <?php if (!empty($reset_password_message)): ?>
+                                    <div class="error mt-2" style="padding:6px;"><?php echo htmlspecialchars($reset_password_message, ENT_QUOTES, 'UTF-8'); ?></div>
+                                  <?php endif; ?>
+                                </div>
+                                <div class="text-center">
+                                  <a class="fs-10" href="/archy/login.php">Torna al login</a>
+                                </div>
+                              </form>
+                            <?php endif; ?>
                           <?php elseif ($loginMode === 'login_otp'): ?>
                             <form name="login-otp-form" method="post" id="login-otp-form">
                               <input type="hidden" name="form_action" value="login_otp">
@@ -372,6 +379,11 @@ $loginMode = isset($login_mode) ? $login_mode : 'login';
             }
           });
         })();
+        <?php if (!empty($reset_password_redirect)): ?>
+        window.setTimeout(function () {
+          window.location.href = "/archy/login.php";
+        }, 3000);
+        <?php endif; ?>
       </script>
         
     </body>
