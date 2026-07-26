@@ -95,6 +95,7 @@ $options = array(
     'manifest' => isset($_GET['manifest']) ? $_GET['manifest'] : 'private/_common/update/manifest.json',
     'customers' => isset($_GET['customers']) ? $_GET['customers'] : 'private/_common/update/customers.csv',
     'dry_run' => $dryRun,
+    'mode' => isset($_GET['mode']) ? $_GET['mode'] : 'db',
 );
 
 try {

@@ -40,7 +40,7 @@ try {
 
     echo json_encode($result, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . PHP_EOL;
     exit(0);
-} catch (Exception $e) {
+} catch (Throwable $e) {
     fwrite(STDERR, $e->getMessage() . PHP_EOL);
     exit(1);
 }

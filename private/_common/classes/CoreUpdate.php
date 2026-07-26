@@ -20,12 +20,18 @@ class CoreUpdate
     {
         $options = array_merge($this->options, is_array($options) ? $options : array());
         $dryRun = $this->toBool(isset($options['dry_run']) ? $options['dry_run'] : true);
+        $mode = isset($options['mode']) ? strtolower(trim((string) $options['mode'])) : 'db';
+
+        if (!in_array($mode, array('db', 'files', 'all'), true)) {
+            throw new RuntimeException('Modalita aggiornamento non valida: ' . $mode . '.');
+        }
 
         $manifestPath = isset($options['manifest']) ? $options['manifest'] : $this->updateRoot . '/manifest.json';
         $customersPath = isset($options['customers']) ? $options['customers'] : $this->defaultCustomersPath();
 
         $manifest = $this->loadManifest($manifestPath);
-        $sql = $this->loadSqlFromManifest($manifest, $manifestPath);
+        $sql = in_array($mode, array('db', 'all'), true) ? $this->loadSqlFromManifest($manifest, $manifestPath) : null;
+        $package = in_array($mode, array('files', 'all'), true) ? $this->loadPackageFromManifest($manifest, $manifestPath) : null;
         $customers = $this->loadCustomers($customersPath);
 
         $results = array();
@@ -39,12 +45,13 @@ class CoreUpdate
                 continue;
             }
 
-            $results[] = $this->processCustomer($customer, $manifest, $sql, $dryRun);
+            $results[] = $this->processCustomer($customer, $manifest, $sql, $package, $dryRun, $mode);
         }
 
         return array(
             'status' => $this->hasFailures($results) ? 'partial' : 'success',
             'dry_run' => $dryRun,
+            'mode' => $mode,
             'manifest_version' => isset($manifest['version']) ? $manifest['version'] : null,
             'customers_file' => $this->resolvePath($customersPath),
             'summary' => $this->summary($results),
@@ -52,45 +59,64 @@ class CoreUpdate
         );
     }
 
-    protected function processCustomer($customer, $manifest, $sql, $dryRun)
+    protected function processCustomer($customer, $manifest, $sql, $package, $dryRun, $mode)
     {
         $mysqli = null;
 
         try {
             $mysqli = $this->connectCustomer($customer);
+            $this->assertUpdateRequirement($mysqli, $manifest);
+            $fileTarget = in_array($mode, array('files', 'all'), true) ? $this->resolveCustomerRoot($customer) : null;
 
             if ($dryRun) {
                 $mysqli->close();
                 return array(
                     'customer' => $customer['customer'],
                     'database' => $customer['db_name'],
+                    'file_target' => $fileTarget,
                     'status' => 'success',
-                    'message' => 'Connessione DB riuscita. Nessuna query eseguita per dry-run.',
+                    'message' => 'Controlli aggiornamento riusciti. Nessuna modifica eseguita per dry-run.',
                 );
             }
 
-            $this->executeSql($mysqli, $sql);
-            $this->recordUpdate($mysqli, $manifest, 'success', false, 'Aggiornamento SQL eseguito correttamente.', array(
+            $applied = array();
+
+            if (in_array($mode, array('db', 'all'), true)) {
+                $this->executeSql($mysqli, $sql);
+                $applied[] = 'db';
+            }
+
+            if (in_array($mode, array('files', 'all'), true)) {
+                $this->applyPackage($package, $fileTarget);
+                $applied[] = 'files';
+            }
+
+            $this->recordUpdate($mysqli, $manifest, 'success', false, 'Aggiornamento eseguito correttamente.', array(
                 'customer' => $customer['customer'],
                 'database' => $customer['db_name'],
+                'file_target' => $fileTarget,
+                'mode' => $mode,
+                'applied' => $applied,
             ));
 
             $mysqli->close();
             return array(
                 'customer' => $customer['customer'],
                 'database' => $customer['db_name'],
+                'file_target' => $fileTarget,
                 'status' => 'success',
-                'message' => 'Aggiornamento SQL eseguito correttamente.',
+                'message' => 'Aggiornamento eseguito correttamente.',
             );
-        } catch (Exception $e) {
+        } catch (Throwable $e) {
             if ($mysqli instanceof mysqli) {
                 try {
                     $this->recordUpdate($mysqli, $manifest, 'failed', $dryRun, $e->getMessage(), array(
                         'customer' => $customer['customer'],
                         'database' => isset($customer['db_name']) ? $customer['db_name'] : null,
+                        'mode' => $mode,
                     ));
                     $mysqli->close();
-                } catch (Exception $ignored) {
+                } catch (Throwable $ignored) {
                 }
             }
 
@@ -215,7 +241,7 @@ class CoreUpdate
             throw new RuntimeException('Manifest non valido.');
         }
 
-        foreach (array('version', 'sql') as $key) {
+        foreach (array('version') as $key) {
             if (!isset($manifest[$key]) || trim((string) $manifest[$key]) === '') {
                 throw new RuntimeException('Manifest incompleto: campo mancante ' . $key . '.');
             }
@@ -224,17 +250,67 @@ class CoreUpdate
         return $manifest;
     }
 
+    protected function assertUpdateRequirement($mysqli, $manifest)
+    {
+        $requires = isset($manifest['requires']) ? trim((string) $manifest['requires']) : '';
+
+        if ($requires === '') {
+            return;
+        }
+
+        if (!$this->tableExists($mysqli, 'archy_core_updates')) {
+            throw new RuntimeException('Versione richiesta ' . $requires . ' non verificabile: tabella archy_core_updates assente.');
+        }
+
+        $requiresSql = $this->sqlValue($mysqli, $requires);
+        $result = $mysqli->query("
+            SELECT COUNT(*) AS total
+            FROM `archy_core_updates`
+            WHERE `version` = " . $requiresSql . "
+              AND `status` = 'success'
+              AND `dry_run` = 0
+        ");
+
+        if (!$result) {
+            throw new RuntimeException('Impossibile verificare versione richiesta: ' . $mysqli->error);
+        }
+
+        $row = $result->fetch_assoc();
+        $result->free();
+
+        if ((int) $row['total'] === 0) {
+            throw new RuntimeException('Versione richiesta non installata: ' . $requires . '.');
+        }
+    }
+
+    protected function tableExists($mysqli, $table)
+    {
+        $tableSql = $this->sqlValue($mysqli, $table);
+        $result = $mysqli->query("
+            SELECT COUNT(*) AS total
+            FROM INFORMATION_SCHEMA.TABLES
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = " . $tableSql . "
+        ");
+
+        if (!$result) {
+            throw new RuntimeException('Impossibile verificare tabella ' . $table . ': ' . $mysqli->error);
+        }
+
+        $row = $result->fetch_assoc();
+        $result->free();
+
+        return (int) $row['total'] > 0;
+    }
+
     protected function loadSqlFromManifest($manifest, $manifestPath)
     {
-        $sqlPath = $manifest['sql'];
-        if (!$this->isUrl($sqlPath)) {
-            if ($this->isUrl($manifestPath)) {
-                $sqlPath = rtrim(dirname($manifestPath), '/\\') . '/' . ltrim($sqlPath, '/\\');
-            } else {
-                $manifestFile = $this->resolvePath($manifestPath);
-                $sqlPath = dirname($manifestFile) . '/' . $sqlPath;
-            }
+        if (!isset($manifest['sql']) || trim((string) $manifest['sql']) === '') {
+            throw new RuntimeException('Manifest incompleto: campo mancante sql.');
         }
+
+        $sqlPath = $manifest['sql'];
+        $sqlPath = $this->resolveManifestAssetPath($manifestPath, $sqlPath);
 
         $sql = $this->readPathOrUrl($sqlPath);
 
@@ -246,6 +322,56 @@ class CoreUpdate
         }
 
         return $sql;
+    }
+
+    protected function loadPackageFromManifest($manifest, $manifestPath)
+    {
+        if (!class_exists('ZipArchive')) {
+            throw new RuntimeException('Estensione PHP ZipArchive non disponibile.');
+        }
+
+        if (!isset($manifest['package']) || trim((string) $manifest['package']) === '') {
+            throw new RuntimeException('Manifest incompleto: campo mancante package.');
+        }
+
+        $packagePath = $this->resolveManifestAssetPath($manifestPath, $manifest['package']);
+        $runtimeDir = $this->updateRoot . '/runtime';
+        $this->ensureDirectory($runtimeDir);
+
+        $packageFile = $runtimeDir . '/' . basename(parse_url($packagePath, PHP_URL_PATH) ?: $manifest['package']);
+        $this->copyPathOrUrl($packagePath, $packageFile);
+
+        if (isset($manifest['sha256']) && trim((string) $manifest['sha256']) !== '') {
+            $hash = hash_file('sha256', $packageFile);
+            if (!hash_equals(strtolower($manifest['sha256']), strtolower($hash))) {
+                throw new RuntimeException('Hash SHA256 del pacchetto non valido.');
+            }
+        }
+
+        $zip = new ZipArchive();
+        if ($zip->open($packageFile) !== true) {
+            throw new RuntimeException('Pacchetto zip non valido: ' . $packageFile);
+        }
+        $zip->close();
+
+        return array(
+            'path' => $packageFile,
+            'source' => $packagePath,
+        );
+    }
+
+    protected function resolveManifestAssetPath($manifestPath, $assetPath)
+    {
+        if ($this->isUrl($assetPath)) {
+            return $assetPath;
+        }
+
+        if ($this->isUrl($manifestPath)) {
+            return rtrim(dirname($manifestPath), '/\\') . '/' . ltrim($assetPath, '/\\');
+        }
+
+        $manifestFile = $this->resolvePath($manifestPath);
+        return dirname($manifestFile) . '/' . $assetPath;
     }
 
     protected function loadCustomers($path)
@@ -317,6 +443,8 @@ class CoreUpdate
                 'db_user' => $this->valueByKey($row, $map, 'db_user'),
                 'db_pass' => $this->valueByKey($row, $map, 'db_pass'),
                 'enabled' => $this->valueByKey($row, $map, 'enabled'),
+                'main_root' => $this->valueByKey($row, $map, 'main_root'),
+                'subdomain_root' => $this->valueByKey($row, $map, 'subdomain_root'),
             );
 
             if ($customer['enabled'] === '') {
@@ -343,6 +471,8 @@ class CoreUpdate
             'db_user' => array('db_user', 'user', 'username', 'utente', 'db_username'),
             'db_pass' => array('db_pass', 'pass', 'password', 'db_password'),
             'enabled' => array('enabled', 'active', 'attivo', 'abilitato', 'abilita'),
+            'main_root' => array('main_root', 'root', 'project_root', 'percorso_root', 'percorso'),
+            'subdomain_root' => array('subdomain_root', 'httpdocs', 'document_root', 'percorso_httpdocs'),
         );
 
         $map = array();
@@ -383,6 +513,126 @@ class CoreUpdate
         $value = strtolower(trim((string) $value));
         $value = preg_replace('/[^a-z0-9]+/', '_', $value);
         return trim($value, '_');
+    }
+
+    protected function resolveCustomerRoot($customer)
+    {
+        $root = '';
+
+        if (isset($customer['main_root']) && trim((string) $customer['main_root']) !== '') {
+            $root = trim((string) $customer['main_root']);
+        } elseif (isset($customer['subdomain_root']) && trim((string) $customer['subdomain_root']) !== '') {
+            $root = trim((string) $customer['subdomain_root']);
+        }
+
+        if ($root === '') {
+            throw new RuntimeException('Percorso root cliente mancante per aggiornamento files.');
+        }
+
+        $root = str_replace('\\', '/', $root);
+        $real = realpath($root);
+
+        if (!$real || !is_dir($real)) {
+            throw new RuntimeException('Percorso root cliente non valido: ' . $root);
+        }
+
+        return str_replace('\\', '/', $real);
+    }
+
+    protected function applyPackage($package, $targetRoot)
+    {
+        if (!is_array($package) || empty($package['path']) || !is_file($package['path'])) {
+            throw new RuntimeException('Pacchetto aggiornamento files non disponibile.');
+        }
+
+        $zip = new ZipArchive();
+        if ($zip->open($package['path']) !== true) {
+            throw new RuntimeException('Impossibile aprire pacchetto aggiornamento files.');
+        }
+
+        for ($i = 0; $i < $zip->numFiles; $i++) {
+            $entry = $zip->getNameIndex($i);
+            if (!$this->isSafeZipEntry($entry)) {
+                $zip->close();
+                throw new RuntimeException('Percorso non consentito nel pacchetto: ' . $entry);
+            }
+        }
+
+        if (!$zip->extractTo($targetRoot)) {
+            $zip->close();
+            throw new RuntimeException('Impossibile estrarre pacchetto in: ' . $targetRoot);
+        }
+
+        $zip->close();
+    }
+
+    protected function isSafeZipEntry($entry)
+    {
+        $entry = str_replace('\\', '/', (string) $entry);
+
+        if ($entry === '' || strpos($entry, "\0") !== false) {
+            return false;
+        }
+
+        if (strpos($entry, '../') !== false || preg_match('/(^|\/)\.\.(\/|$)/', $entry)) {
+            return false;
+        }
+
+        if (preg_match('/^[a-zA-Z]:\//', $entry) || strpos($entry, '/') === 0) {
+            return false;
+        }
+
+        return true;
+    }
+
+    protected function copyPathOrUrl($source, $destination)
+    {
+        $this->ensureDirectory(dirname($destination));
+
+        if ($this->isUrl($source)) {
+            $write = fopen($destination, 'wb');
+            if (!$write) {
+                throw new RuntimeException('Impossibile scrivere file: ' . $destination);
+            }
+
+            $ch = curl_init($source);
+            curl_setopt($ch, CURLOPT_FILE, $write);
+            curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+            curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 10);
+            curl_setopt($ch, CURLOPT_TIMEOUT, 300);
+            $ok = curl_exec($ch);
+            $error = curl_error($ch);
+            $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            curl_close($ch);
+            fclose($write);
+
+            if (!$ok || $code >= 400) {
+                @unlink($destination);
+                throw new RuntimeException('Impossibile scaricare URL ' . $source . ': ' . ($error ? $error : 'HTTP ' . $code));
+            }
+
+            return;
+        }
+
+        $source = $this->resolvePath($source);
+        if (!is_file($source)) {
+            throw new RuntimeException('File non trovato: ' . $source);
+        }
+
+        if (!copy($source, $destination)) {
+            throw new RuntimeException('Impossibile copiare file: ' . $source);
+        }
+    }
+
+    protected function ensureDirectory($dir)
+    {
+        if (is_dir($dir)) {
+            return;
+        }
+
+        if (!mkdir($dir, 0755, true) && !is_dir($dir)) {
+            throw new RuntimeException('Impossibile creare cartella: ' . $dir);
+        }
     }
 
     protected function readPathOrUrl($path)
