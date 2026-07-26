@@ -8,6 +8,20 @@ $intent->add='Nuovo utente';
 $intent->view_title='Utente: archy_users.name archy_users.surname';
 $intent->joins=[];
 $intent->where="archy_users.id > 2";
+
+$password_column = array(
+        'label'=>'Password',
+        'type'=>'password',
+        'formatter'=>function($d,$row){return "";},
+        'attributes'=>array(
+            'autocomplete="new-password"'
+        )
+);
+
+if (!isset($_GET['id']) || $_GET['id'] == '') {
+    $password_column['required'] = true;
+}
+
 $intent->columns=array(
     'archy_users.id'=>array(
             'label'=>'ID',
@@ -19,12 +33,6 @@ $intent->columns=array(
             'type'=>'email',
             'required'=>true
     ),
-    'archy_users.password'=>array(
-            'label'=>'Password',
-            'type'=>'password',
-            'required'=>true,
-            'formatter'=>function($d,$row){return "";}
-    ),
     'archy_users.name'=>array(
             'label'=>'Nome',
             'type'=>'text',
@@ -34,7 +42,8 @@ $intent->columns=array(
             'label'=>'Cognome',
             'type'=>'text',
             'required'=>true
-    ),    
+    ),
+    'archy_users.password'=>$password_column,    
     'archy_users.created_at'=>array(
             'label'=>'Data Creazione',
             'type'=>'date',

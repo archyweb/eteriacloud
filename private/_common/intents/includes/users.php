@@ -34,6 +34,19 @@ if (isset($_GET['id'])) {
 ?>
 
 <div class="col-md-12">
+    <ul class="list-unstyled fs-10 mb-3" id="user-password-rules">
+        <li data-rule="length">Almeno 12 caratteri</li>
+        <li data-rule="lowercase">Almeno una lettera minuscola</li>
+        <li data-rule="uppercase">Almeno una lettera maiuscola</li>
+        <li data-rule="number">Almeno un numero</li>
+        <li data-rule="special">Almeno un carattere speciale</li>
+        <li data-rule="spaces">Nessuno spazio</li>
+        <li data-rule="email">Non contiene la parte iniziale dell email</li>
+        <li data-rule="strength">Complessita adeguata</li>
+    </ul>
+</div>
+
+<div class="col-md-12">
     <div class="form-group">
         <label for="user_roles">Ruoli utente</label>
 
@@ -65,6 +78,96 @@ if (isset($_GET['id'])) {
         </select>
     </div>
 </div>
+
+
+
+<script>
+(function () {
+    var form = document.getElementById("editForm");
+    var password = document.getElementById("archy_users_password");
+    var email = document.getElementById("archy_users_email");
+    var rulesList = document.getElementById("user-password-rules");
+
+    if (!form || !password || !email || !rulesList) {
+        return;
+    }
+
+    var isEdit = <?php echo isset($_GET['id']) && $_GET['id'] != '' ? 'true' : 'false'; ?>;
+    var minimumScore = <?php echo max(3, (int) $app->auth->config->password_min_score); ?>;
+    var submitButtons = form.querySelectorAll('button[type="submit"]');
+
+    function getEmailLocalPart() {
+        var value = (email.value || "").toLowerCase();
+        var at = value.indexOf("@");
+        return at === -1 ? "" : value.substring(0, at);
+    }
+
+    function setSubmitDisabled(disabled) {
+        submitButtons.forEach(function (button) {
+            button.disabled = disabled;
+        });
+    }
+
+    function setRuleState(name, passed, neutral) {
+        var item = rulesList.querySelector('[data-rule="' + name + '"]');
+
+        if (!item) {
+            return;
+        }
+
+        item.classList.toggle("text-success", !neutral && passed);
+        item.classList.toggle("text-danger", !neutral && !passed);
+        item.classList.toggle("text-muted", neutral);
+        item.dataset.passed = passed ? "1" : "0";
+    }
+
+    function validatePassword() {
+        var value = password.value || "";
+        var emailLocalPart = getEmailLocalPart();
+        var valueLower = value.toLowerCase();
+        var neutral = isEdit && value === "";
+
+        if (neutral) {
+            Array.prototype.forEach.call(rulesList.querySelectorAll("[data-rule]"), function (item) {
+                setRuleState(item.dataset.rule, true, true);
+            });
+            setSubmitDisabled(false);
+            return true;
+        }
+
+        var strength = typeof zxcvbn === "function" ? zxcvbn(value).score : minimumScore;
+        var rules = {
+            length: value.length >= 12,
+            lowercase: /[a-z]/.test(value),
+            uppercase: /[A-Z]/.test(value),
+            number: /[0-9]/.test(value),
+            special: /[^A-Za-z0-9\s]/.test(value),
+            spaces: !/\s/.test(value),
+            email: emailLocalPart === "" || emailLocalPart.length < 4 || valueLower.indexOf(emailLocalPart) === -1,
+            strength: strength >= minimumScore
+        };
+        var valid = true;
+
+        Object.keys(rules).forEach(function (name) {
+            setRuleState(name, rules[name], false);
+            valid = valid && rules[name];
+        });
+
+        setSubmitDisabled(!valid);
+        return valid;
+    }
+
+    password.addEventListener("input", validatePassword);
+    email.addEventListener("input", validatePassword);
+    form.addEventListener("submit", function (event) {
+        if (!validatePassword()) {
+            event.preventDefault();
+        }
+    });
+
+    validatePassword();
+})();
+</script>
 
 <?php
 /*

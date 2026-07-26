@@ -10,6 +10,177 @@ class ArchyAuth extends Auth
         parent::__construct($dbh, $config);
     }
 
+    public function startEmailOtpLogin(string $email, string $password, int $remember = 0, string $captcha_response = ''): array
+    {
+        $email = trim(mb_strtolower($email, 'UTF-8'));
+        $return = [
+            'error' => true,
+            'message' => 'Credenziali non valide.'
+        ];
+
+        $block_status = $this->isBlocked();
+
+        if ($block_status == 'verify' && !$this->checkCaptcha($captcha_response)) {
+            $return['message'] = $this->__lang('captcha.verify_code_invalid');
+            return $return;
+        }
+
+        if ($block_status == 'block') {
+            $return['message'] = $this->__lang('user.temporary_banned');
+            return $return;
+        }
+
+        $validateEmail = $this->validateEmail($email);
+        $validatePassword = $this->validatePasswordLength($password);
+
+        if ($validateEmail['error'] == 1 || $validatePassword['error'] == 1 || ($remember != 0 && $remember != 1)) {
+            $this->addAttempt();
+            return $return;
+        }
+
+        $uid = $this->getUID($email);
+
+        if (!$uid) {
+            $this->addAttempt();
+            return $return;
+        }
+
+        $user = $this->getBaseUser($uid);
+
+        if (!$user || !$this->password_verify_with_rehash($password, $user['password'], $uid)) {
+            $this->addAttempt();
+            return $return;
+        }
+
+        if ($user['isactive'] != 1) {
+            $this->addAttempt();
+            $return['message'] = $this->__lang('account.not_activated');
+            return $return;
+        }
+
+        $mailer = $this->config->mailerDriver;
+
+        if (!is_object($mailer) || (method_exists($mailer, 'isConfigured') && !$mailer->isConfigured())) {
+            $return['message'] = 'Configurazione SMTP incompleta. Impossibile inviare il codice di accesso.';
+            return $return;
+        }
+
+        $code = (string) random_int(100000, 999999);
+        $selector = bin2hex(random_bytes(32));
+        $selectorHash = hash('sha256', $selector);
+        $expiresAt = date('Y-m-d H:i:s', time() + 600);
+        $agent = substr($_SERVER['HTTP_USER_AGENT'] ?? '', 0, 255);
+
+        $this->dbh->prepare("
+            UPDATE archy_login_otps
+            SET consumed_at = NOW()
+            WHERE uid = ?
+            AND consumed_at IS NULL
+        ")->execute([$uid]);
+
+        $query = $this->dbh->prepare("
+            INSERT INTO archy_login_otps
+                (uid, email, selector_hash, otp_hash, remember, expires_at, ip, user_agent, created_at)
+            VALUES
+                (?, ?, ?, ?, ?, ?, ?, ?, NOW())
+        ");
+
+        $query->execute([
+            $uid,
+            $email,
+            $selectorHash,
+            password_hash($code, PASSWORD_DEFAULT),
+            $remember,
+            $expiresAt,
+            self::getIp(),
+            $agent
+        ]);
+
+        if (!$this->sendLoginOtpEmail($email, $code)) {
+            $this->dbh->prepare("UPDATE archy_login_otps SET consumed_at = NOW() WHERE selector_hash = ?")->execute([$selectorHash]);
+            $return['message'] = 'Impossibile inviare il codice di accesso. Riprova piu tardi.';
+            return $return;
+        }
+
+        return [
+            'error' => false,
+            'message' => 'Ti abbiamo inviato un codice di accesso via email.',
+            'otp_token' => $selector,
+            'email' => $email
+        ];
+    }
+
+    public function completeEmailOtpLogin(string $selector, string $otp): array
+    {
+        $return = [
+            'error' => true,
+            'message' => 'Codice non valido o scaduto.'
+        ];
+
+        $selector = trim($selector);
+        $otp = preg_replace('/\D+/', '', $otp);
+
+        if ($selector === '' || strlen($otp) !== 6) {
+            $this->addAttempt();
+            return $return;
+        }
+
+        $query = $this->dbh->prepare("
+            SELECT id, uid, otp_hash, remember, attempts, expires_at
+            FROM archy_login_otps
+            WHERE selector_hash = ?
+            AND consumed_at IS NULL
+            LIMIT 1
+        ");
+        $query->execute([hash('sha256', $selector)]);
+        $otpRow = $query->fetch(\PDO::FETCH_ASSOC);
+
+        if (!$otpRow) {
+            $this->addAttempt();
+            return $return;
+        }
+
+        if (strtotime($otpRow['expires_at']) < time() || (int) $otpRow['attempts'] >= 5) {
+            $this->addAttempt();
+            return $return;
+        }
+
+        if (!password_verify($otp, $otpRow['otp_hash'])) {
+            $this->dbh->prepare("UPDATE archy_login_otps SET attempts = attempts + 1 WHERE id = ?")->execute([$otpRow['id']]);
+            $this->addAttempt();
+            return $return;
+        }
+
+        $sessiondata = $this->addSession((int) $otpRow['uid'], (bool) $otpRow['remember']);
+
+        if (!$sessiondata) {
+            $return['message'] = $this->__lang('system.error') . ' #01';
+            return $return;
+        }
+
+        $this->dbh->prepare("UPDATE archy_login_otps SET consumed_at = NOW() WHERE id = ?")->execute([$otpRow['id']]);
+
+        return [
+            'error' => false,
+            'message' => $this->__lang('logged_in'),
+            'hash' => $sessiondata['hash'],
+            'expire' => $sessiondata['expire'],
+            'cookie_name' => $this->config->cookie_name
+        ];
+    }
+
+    private function sendLoginOtpEmail(string $email, string $code): bool
+    {
+        $siteName = $this->config->site_name ?: 'Archy Art';
+        $subject = $siteName . ' - Codice di accesso';
+        $body = '<p>Il tuo codice di accesso e:</p>'
+            . '<p style="font-size:24px;font-weight:bold;letter-spacing:3px;">' . htmlspecialchars($code, ENT_QUOTES, 'UTF-8') . '</p>'
+            . '<p>Il codice scade tra 10 minuti. Se non hai richiesto tu l accesso, ignora questa email.</p>';
+        $altBody = "Il tuo codice di accesso e: " . $code . "\nIl codice scade tra 10 minuti.";
+
+        return $this->config->mailerDriver->send($email, $subject, $body, $altBody);
+    }
+
     public function addOrUpdateUser($old_email, $email, $password) {
         $email_activation = false;
         $userUID = $this->getUID($old_email);
@@ -23,6 +194,11 @@ class ArchyAuth extends Auth
         } else {
             if ($old_email != $email) {
                 $res = $this->archyUpdateEmail($userUID, $email);
+                if ($res['error'] != 0) {
+                    $return['error'] = true;
+                    $return['message'] = $res['message'];
+                    return $return;
+                }
             }
 
             if ($password) {
@@ -120,7 +296,7 @@ class ArchyAuth extends Auth
         $query_prepared = $this->dbh->prepare($query);
         $query_prepared->execute([$newpass, $uid]);
 
-        $return['error'] = true;
+        $return['error'] = false;
         $return['message'] = $this->__lang("password_changed");
 
         return $return;

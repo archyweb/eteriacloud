@@ -22,18 +22,25 @@ class ArchyPHPAuthMailer implements MailerInterface
     private function shouldUseSmtp(): bool
     {
         $transport = strtolower((string) ($this->settings['mail_transport'] ?? 'auto'));
+        $hasSmtpCredentials = !empty($this->settings['smtp_host'])
+            && !empty($this->settings['smtp_username'])
+            && !empty($this->settings['smtp_password']);
+        $hasSmtpSecurePort = !empty($this->settings['smtp_secure'])
+            && !empty($this->settings['smtp_port']);
 
         if ($transport === 'smtp') {
             return true;
         }
 
-        if (in_array($transport, ['mail', 'php_mail', 'sendmail'], true)) {
-            return false;
+        if (in_array($transport, ['mail', 'php_mail'], true)) {
+            return $hasSmtpSecurePort;
         }
 
-        return !empty($this->settings['smtp_host'])
-            || !empty($this->settings['smtp_port'])
-            || !empty($this->settings['smtp_secure']);
+        if ($transport === 'sendmail') {
+            return $hasSmtpSecurePort;
+        }
+
+        return $hasSmtpCredentials || $hasSmtpSecurePort;
     }
 
     private function shouldUseSendmail(): bool
@@ -54,19 +61,16 @@ class ArchyPHPAuthMailer implements MailerInterface
 
             $sendmailFallbackToMail = false;
 
-            if ($this->shouldUseSendmail() && function_exists('popen')) {
-                $mail->isSendmail();
-            } elseif ($this->shouldUseSendmail()) {
-                $sendmailFallbackToMail = true;
-                $mail->isMail();
-            } elseif ($this->shouldUseSmtp()) {
+            if ($this->shouldUseSmtp()) {
                 $mail->isSMTP();
-                $mail->Host = !empty($this->settings['smtp_host']) ? $this->settings['smtp_host'] : '127.0.0.1';
-                $mail->SMTPAuth = !empty($this->settings['smtp_username']);
+                $mail->Host = !empty($this->settings['smtp_host']) ? $this->settings['smtp_host'] : 'localhost';
+                $mail->SMTPAuth = !empty($this->settings['smtp_host'])
+                    && !empty($this->settings['smtp_username'])
+                    && !empty($this->settings['smtp_password']);
                 $mail->Username = $this->settings['smtp_username'] ?? '';
                 $mail->Password = $this->settings['smtp_password'] ?? '';
                 if (!empty($this->settings['smtp_secure'])) {
-                    $mail->SMTPSecure = $this->settings['smtp_secure'];
+                    $mail->SMTPSecure = strtolower((string) $this->settings['smtp_secure']) === 'starttls' ? PHPMailer::ENCRYPTION_STARTTLS : strtolower((string) $this->settings['smtp_secure']);
                 }
                 $mail->Port = (int) ($this->settings['smtp_port'] ?? 587);
                 $mail->Timeout = 15;
@@ -79,6 +83,19 @@ class ArchyPHPAuthMailer implements MailerInterface
                             'allow_self_signed' => true
                         ]
                     ];
+                }
+            } elseif ($this->shouldUseSendmail() && function_exists('popen')) {
+                $mail->isSendmail();
+            } elseif ($this->shouldUseSendmail()) {
+                $sendmailFallbackToMail = true;
+                $mail->isMail();
+            } else {
+                $mail->isMail();
+                if (!empty($this->settings['smtp_secure'])) {
+                    $mail->SMTPSecure = $this->settings['smtp_secure'];
+                }
+                if (!empty($this->settings['smtp_port'])) {
+                    $mail->Port = (int) $this->settings['smtp_port'];
                 }
             }
 

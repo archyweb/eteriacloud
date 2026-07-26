@@ -9,10 +9,21 @@
     $reset_password_message = '';
     $reset_password_success = false;
     $reset_password_token = $_GET['token'] ?? '';
+    $login_otp_message = '';
+    $login_otp_success = false;
+    $login_otp_email = '';
+    $login_otp_token = '';
     $mode = str_replace('-', '_', $_GET['mode'] ?? 'login');
-    $allowed_modes = ['login', 'forgot_password', 'reset_password'];
-    $login_mode = in_array($mode, $allowed_modes, true) ? $mode : 'login';
     $options = require $main_root . '/private/_common/config.php';
+    $login_config = require $subdomain_root . '/config-local.php';
+    $login_email_otp_enabled = !empty($login_config['login_email_otp']);
+    $allowed_modes = ['login', 'forgot_password', 'reset_password'];
+
+    if ($login_email_otp_enabled) {
+        $allowed_modes[] = 'login_otp';
+    }
+
+    $login_mode = in_array($mode, $allowed_modes, true) ? $mode : 'login';
     
     if($options['maintenance']==true){
         header('location: /archy/maintenance.php');
@@ -49,14 +60,51 @@
                 );
                 $reset_password_success = empty($reset['error']);
                 $reset_password_message = $reset['message'];
+            } elseif ($form_action === 'login_otp') {
+                $login_mode = 'login_otp';
+                $login_otp_token = $_POST['otp_token'] ?? '';
+                $login_otp_email = $_POST['otp_email'] ?? '';
+
+                if (!$login_email_otp_enabled) {
+                    $login_error_message = 'Accesso con codice email non attivo.';
+                    $login_mode = 'login';
+                } else {
+                    $login = $app->auth->completeEmailOtpLogin(
+                        $login_otp_token,
+                        $_POST['otp_code'] ?? ''
+                    );
+
+                    if (!empty($login['error'])) {
+                        $login_otp_message = $login['message'];
+                        $login_otp_success = false;
+                    } else {
+                        $app->dashboardPage();
+                        exit;
+                    }
+                }
             } else {
-                $login = $app->login($_POST['username'], $_POST['password']);
+                if ($login_email_otp_enabled) {
+                    $login = $app->auth->startEmailOtpLogin(
+                        $_POST['username'] ?? '',
+                        $_POST['password'] ?? ''
+                    );
+                } else {
+                    $login = $app->login($_POST['username'], $_POST['password']);
+                }
 
                 if ($login['error']!='') {
                     $login_error_message = $login['message'];
                 } else {
+                    if ($login_email_otp_enabled) {
+                        $login_mode = 'login_otp';
+                        $login_otp_message = $login['message'];
+                        $login_otp_success = true;
+                        $login_otp_token = $login['otp_token'] ?? '';
+                        $login_otp_email = $login['email'] ?? ($_POST['username'] ?? '');
+                    } else {
                     $app->dashboardPage();
                     exit;
+                    }
                 }
             }
         } catch (Throwable $e) {
