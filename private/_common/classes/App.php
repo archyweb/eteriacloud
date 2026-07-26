@@ -4900,17 +4900,6 @@ public function excel(&$data, $filename, &$columns_labels, &$columns_data) {
             */
 
             $escape_pdf_cell = function($value){
-				
-				if(is_array($value)):
-                    $flat = [];
-                    array_walk_recursive($value, function($item) use (&$flat){
-                        if(is_scalar($item) && trim((string)$item) != ''):
-                            $flat[] = trim((string)$item);
-                        endif;
-                    });
-                    $value = implode(', ', $flat);
-                endif;
-
                 $value = (string)$value;
 
                 // Mantiene separazioni leggibili già presenti.

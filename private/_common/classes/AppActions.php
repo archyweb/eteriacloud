@@ -25,6 +25,183 @@ class AppActions extends ExtraActions{
             $app=$app->backup;
 	}
 	
+	public function send_notice(){
+		global $app;
+		$category=isset($_POST['category'])? $_POST['category'] : 'general';
+		$priority=isset($_POST['priority'])? $_POST['priority'] : 'normal';
+		$title=isset($_POST['title'])? trim($_POST['title']) : '';
+		$message=isset($_POST['message'])? trim($_POST['message']) : '';
+		$recipients_mode=isset($_POST['recipients_mode'])? $_POST['recipients_mode'] : 'local';
+		
+		if($message==''):
+			set_message("danger","Inserire il testo della notifica.");
+			header('location: /archy/app.php?view=notice_sender');
+			return;
+		endif;
+		
+		$notice_text='';
+		if($title!=''):
+			$notice_text.='<strong>'.htmlspecialchars($title,ENT_QUOTES,'UTF-8').'</strong><br>';
+		endif;
+		$notice_text.=nl2br(htmlspecialchars($message,ENT_QUOTES,'UTF-8'));
+		
+		$notice=new Notice();
+		$payload=[
+			'notice'=>$notice_text,
+			'intent'=>'archy_notices',
+			'intent_id'=>'0',
+			'source'=>'archy',
+			'priority'=>$priority
+		];
+		
+		if($recipients_mode=='local'):
+			$this->store_notice_payload($notice,$payload,$category);
+			set_message("success","Notifica inviata.");
+		else:
+			$result=$this->broadcast_notice_payload($payload,$category,$recipients_mode,isset($_POST['customers'])? $_POST['customers'] : []);
+			if($result['target']==0):
+				set_message("warning","Nessun cliente destinatario selezionato o disponibile.");
+			elseif($result['failed']>0):
+				set_message("warning","Broadcast completato con errori: ".$result['success']." inviate, ".$result['failed']." errori.");
+			else:
+				set_message("success","Broadcast completato: ".$result['success']." notifiche inviate.");
+			endif;
+		endif;
+		
+		header('location: /archy/app.php?view=notice_sender');
+	}
+	
+	private function store_notice_payload($notice,$payload,$category){
+		if($category=='support'):
+			$notice->support($payload);
+		elseif($category=='administrative'):
+			$notice->administrative($payload);
+		elseif($category=='update'):
+			$notice->update($payload);
+		else:
+			$payload['category']='general';
+			$notice->set($payload);
+		endif;
+	}
+	
+	private function broadcast_notice_payload($payload,$category,$mode,$selected_customers){
+		$customers=$this->load_notice_customers();
+		$selected_customers=array_map('strval', is_array($selected_customers)? $selected_customers : []);
+		$selected_lookup=array_fill_keys($selected_customers,true);
+		$result=['success'=>0,'failed'=>0,'target'=>0];
+		
+		foreach($customers as $customer):
+			if($mode=='selected' && !isset($selected_lookup[$customer['customer']])):
+				continue;
+			endif;
+			$result['target']++;
+			$mysqli=NULL;
+			try{
+				$mysqli=$this->connect_notice_customer($customer);
+				$this->ensure_customer_notice_columns($mysqli);
+				$this->insert_notice_for_customer($mysqli,$payload,$category);
+				$result['success']++;
+			}catch(Throwable $e){
+				$result['failed']++;
+			}
+			if($mysqli instanceof mysqli):
+				$mysqli->close();
+			endif;
+		endforeach;
+		
+		return $result;
+	}
+	
+	private function load_notice_customers(){
+		global $app;
+		$path=isset($app->config['core_update_customers_path'])? $app->config['core_update_customers_path'] : 'private/_common/update/customers.csv';
+		$file=$app->main_root.'/'.ltrim($path,'/');
+		if(!is_file($file)):
+			return [];
+		endif;
+		$handle=fopen($file,'r');
+		if(!$handle):
+			return [];
+		endif;
+		$headers=fgetcsv($handle,0,';');
+		if($headers && count($headers)==1 && strpos($headers[0],',')!==false):
+			$headers=str_getcsv($headers[0],',');
+		endif;
+		$headers=array_map('trim',$headers ?: []);
+		$customers=[];
+		while(($row=fgetcsv($handle,0,';'))!==false):
+			if(count($row)==1 && strpos($row[0],',')!==false):
+				$row=str_getcsv($row[0],',');
+			endif;
+			if(count(array_filter($row,'strlen'))==0):
+				continue;
+			endif;
+			$row=array_slice(array_pad($row,count($headers),''),0,count($headers));
+			$customer=array_combine($headers,$row);
+			if(!$customer || !isset($customer['customer']) || trim((string)$customer['customer'])==''):
+				continue;
+			endif;
+			$enabled=isset($customer['enabled'])? strtolower(trim((string)$customer['enabled'])) : '1';
+			if(in_array($enabled,['0','false','no','off'],true)):
+				continue;
+			endif;
+			$customers[]=$customer;
+		endwhile;
+		fclose($handle);
+		return $customers;
+	}
+	
+	private function connect_notice_customer($customer){
+		foreach(['customer','db_host','db_name','db_user'] as $key):
+			if(!isset($customer[$key]) || trim((string)$customer[$key])==''):
+				throw new RuntimeException('Configurazione cliente incompleta.');
+			endif;
+		endforeach;
+		$port=isset($customer['db_port']) && $customer['db_port']!==''? (int)$customer['db_port'] : 3306;
+		$mysqli=@new mysqli($customer['db_host'],$customer['db_user'],isset($customer['db_pass'])? $customer['db_pass'] : '',$customer['db_name'],$port);
+		if($mysqli->connect_errno):
+			throw new RuntimeException($mysqli->connect_error);
+		endif;
+		$mysqli->set_charset('utf8mb4');
+		return $mysqli;
+	}
+	
+	private function insert_notice_for_customer($mysqli,$payload,$category){
+		$columns=['notice','intent','intent_id','source','priority'];
+		$values=[
+			"'".$mysqli->real_escape_string($payload['notice'])."'",
+			"'".$mysqli->real_escape_string($payload['intent'])."'",
+			"'".$mysqli->real_escape_string($payload['intent_id'])."'",
+			"'".$mysqli->real_escape_string($payload['source'])."'",
+			"'".$mysqli->real_escape_string($payload['priority'])."'"
+		];
+		$has_category=$mysqli->query("show columns from archy_notices like 'category'");
+		if($has_category && $has_category->num_rows>0):
+			$columns[]='category';
+			$values[]="'".$mysqli->real_escape_string($category)."'";
+		endif;
+		$sql="insert into archy_notices (".join(',',$columns).") values (".join(',',$values).")";
+		if(!$mysqli->query($sql)):
+			throw new RuntimeException($mysqli->error);
+		endif;
+	}
+	
+	private function ensure_customer_notice_columns($mysqli){
+		$this->ensure_customer_notice_column($mysqli,'source',"varchar(32) not null default 'local'");
+		$this->ensure_customer_notice_column($mysqli,'priority',"varchar(16) not null default 'normal'");
+	}
+	
+	private function ensure_customer_notice_column($mysqli,$column,$definition){
+		$column_safe=$mysqli->real_escape_string($column);
+		$result=$mysqli->query("show columns from archy_notices like '".$column_safe."'");
+		if($result && $result->num_rows>0):
+			return;
+		endif;
+		if(!$mysqli->query("alter table archy_notices add column ".$column." ".$definition)):
+			throw new RuntimeException($mysqli->error);
+		endif;
+	}
+	
 	// main actions and helpers
 	
 	public function store($real_save = false){
@@ -37,9 +214,20 @@ class AppActions extends ExtraActions{
                         $this->$before_update();
                 endif;
 
+                if (isset($_POST['intent']) && $_POST['intent'] === 'archy_users') {
+                    $this->validate_archy_user_credentials_request();
+                }
+
                 if(isset($_POST['main'])) {
                     $values=array();
                     foreach($_POST['main'] as $field=>$value):
+                        if (
+                            isset($_POST['intent']) &&
+                            $_POST['intent'] === 'archy_users' &&
+                            $field === 'password'
+                        ) {
+                            $value = '';
+                        }
 
                         /*
                         |--------------------------------------------------------------------------
@@ -145,6 +333,42 @@ class AppActions extends ExtraActions{
                 
             endif;
 	}
+
+    protected function validate_archy_user_credentials_request()
+    {
+        $email = $_POST['main']['email'] ?? '';
+        $password = $_POST['main']['password'] ?? '';
+        $old_email = $_POST['email'] ?? $email;
+        $is_new_auth_user = !$this->auth->getUID($old_email);
+        $referer = $_SERVER['HTTP_REFERER'] ?? '/';
+
+        if ($is_new_auth_user && $password === '') {
+            set_message('error', 'Inserisci una password per creare il nuovo utente.');
+            header('location: '.$referer);
+            exit;
+        }
+
+        if ($old_email !== $email) {
+            $old_uid = $this->auth->getUID($old_email);
+            $new_uid = $this->auth->getUID($email);
+
+            if ($new_uid && (!$old_uid || $new_uid !== $old_uid)) {
+                set_message('error', 'Questa email e gia in uso da un altro utente.');
+                header('location: '.$referer);
+                exit;
+            }
+        }
+
+        if ($password !== '') {
+            $validation = $this->auth->validateStrictPassword($password, $email);
+
+            if (!$validation['valid']) {
+                set_message('error', $validation['message']);
+                header('location: '.$referer);
+                exit;
+            }
+        }
+    }
 	
     /*
     |--------------------------------------------------------------------------
@@ -801,15 +1025,14 @@ class AppActions extends ExtraActions{
 	
 	public function close_ticket(){
 		$support=new Support();
-		$support->close($_GET['thread_id']);
-		set_message("success","Ticket chiuso.");
+		if($support->close($_GET['thread_id'])):
+			set_message("success","Ticket chiuso.");
+		endif;
 		header('location: '.$_SERVER['HTTP_REFERER']);
 	}
 	
 	public function reopen_ticket(){
-		$support=new Support();
-		$support->reopen($_GET['thread_id']);
-		set_message("success","Ticket riaperto.");
+		set_message("warning","La riapertura dei ticket non e disponibile.");
 		header('location: '.$_SERVER['HTTP_REFERER']);
 	}
 	

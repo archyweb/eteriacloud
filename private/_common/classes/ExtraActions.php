@@ -1221,8 +1221,32 @@ public function store_credentials()
     $password = $_POST['main']['password'] ?? '';
     $email = $_POST['main']['email'] ?? '';
     $old_email = $_POST['email'] ?? $email;
+    $is_new_auth_user = !$this->auth->getUID($old_email);
+    $referer = $_SERVER['HTTP_REFERER'] ?? '/';
 
-    $this->auth->addOrUpdateUser($old_email, $email, $password);
+    if ($is_new_auth_user && $password === '') {
+        set_message('error', 'Inserisci una password per creare il nuovo utente.');
+        header('location: '.$referer);
+        exit;
+    }
+
+    if ($password !== '') {
+        $validation = $this->auth->validateStrictPassword($password, $email);
+
+        if (!$validation['valid']) {
+            set_message('error', $validation['message']);
+            header('location: '.$referer);
+            exit;
+        }
+    }
+
+    $credentials = $this->auth->addOrUpdateUser($old_email, $email, $password);
+
+    if (!empty($credentials['error'])) {
+        set_message('error', $credentials['message']);
+        header('location: '.$referer);
+        exit;
+    }
 
     /*
     |--------------------------------------------------------------------------
