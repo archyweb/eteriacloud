@@ -22,6 +22,9 @@ class StoreCloud
      */
     protected $cf_images_hash = '';
     protected $cf_customer_hash = '';
+    protected $cf_images_signing_key = '';
+    protected $cf_images_url_expiration = 86400;
+    protected $cf_images_signed_urls = false;
     /**
      * Domain for Cloudflare Images.
      * @var string
@@ -61,6 +64,12 @@ class StoreCloud
         $this->notify_api_token = $this->envValue(['STORECLOUD_NOTIFY_API_TOKEN', 'NOTIFY_API_TOKEN', 'notify_api_token']);
         $this->cf_images_hash = $this->envValue(['STORECLOUD_CF_IMAGES_HASH', 'CLOUDFLARE_IMAGES_HASH', 'CF_IMAGES_HASH', 'cf_images_hash']);
         $this->cf_customer_hash = $this->envValue(['STORECLOUD_CF_CUSTOMER_HASH', 'CLOUDFLARE_CUSTOMER_HASH', 'CF_CUSTOMER_HASH', 'cf_customer_hash']);
+        $this->cf_images_signing_key = $this->envValue(['STORECLOUD_CF_IMAGES_SIGNING_KEY', 'CLOUDFLARE_IMAGES_SIGNING_KEY', 'IMAGES_SIGNING_KEY', 'cf_images_signing_key']);
+        $this->cf_images_url_expiration = (int) $this->envValue(['STORECLOUD_CF_IMAGES_URL_EXPIRATION', 'CLOUDFLARE_IMAGES_URL_EXPIRATION', 'IMAGES_URL_EXPIRATION', 'cf_images_url_expiration'], '86400');
+        $this->cf_images_signed_urls = $this->isTruthy($this->envValue(['STORECLOUD_CF_IMAGES_SIGNED_URLS', 'CLOUDFLARE_IMAGES_SIGNED_URLS', 'IMAGES_SIGNED_URLS', 'cf_images_signed_urls'], 'false'));
+        if ($this->cf_images_url_expiration <= 0) {
+            $this->cf_images_url_expiration = 86400;
+        }
         $this->cf_storage_access_key = $this->envValue(['STORECLOUD_R2_ACCESS_KEY', 'CLOUDFLARE_R2_ACCESS_KEY', 'R2_ACCESS_KEY', 'cf_storage_access_key']);
         $this->cf_storage_secret_key = $this->envValue(['STORECLOUD_R2_SECRET_KEY', 'CLOUDFLARE_R2_SECRET_KEY', 'R2_SECRET_KEY', 'cf_storage_secret_key']);
         $this->cf_storage_bucket_name = $this->config['customer_bucket'];
@@ -135,9 +144,22 @@ class StoreCloud
             if ($value !== false && $value !== '') {
                 return $value;
             }
+
+            if (isset($this->config[$key]) && $this->config[$key] !== '') {
+                return (string) $this->config[$key];
+            }
         }
 
         return $default;
+    }
+
+    private function isTruthy($value): bool
+    {
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        return in_array(strtolower(trim((string) $value)), ['1', 'true', 'yes', 'on'], true);
     }
 
     protected function ensureStoreCloudConfig(array $values, string $context): void
@@ -471,7 +493,39 @@ class StoreCloud
     public function getImageUrl(string $image_id, string $variant = 'public'): string
     {
         //return "{$this->domain}/cdn-cgi/imagedelivery/{$this->cf_images_hash}/{$image_id}/{$variant}";
-        return "https://imagedelivery.net/".$this->cf_images_hash."/{$image_id}/{$variant}";
+        $imageUrl = "https://imagedelivery.net/".$this->cf_images_hash."/{$image_id}/{$variant}";
+        if (!$this->cf_images_signed_urls) {
+            return $imageUrl;
+        }
+
+        return $this->signImageUrl($imageUrl);
+    }
+
+    public function signImageUrl(string $image_url): string
+    {
+        if (trim($this->cf_images_signing_key) === '') {
+            error_log('[StoreCloud] Cloudflare Images signing key missing. Returning unsigned URL.');
+            return $image_url;
+        }
+
+        $parts = parse_url($image_url);
+        if (!is_array($parts) || empty($parts['scheme']) || empty($parts['host']) || empty($parts['path'])) {
+            return $image_url;
+        }
+
+        parse_str($parts['query'] ?? '', $query);
+        $query['exp'] = time() + $this->cf_images_url_expiration;
+        unset($query['sig']);
+
+        $queryString = http_build_query($query, '', '&', PHP_QUERY_RFC3986);
+        $stringToSign = $parts['path'] . '?' . $queryString;
+        $signature = hash_hmac('sha256', $stringToSign, $this->cf_images_signing_key);
+        $query['sig'] = $signature;
+
+        $signedQueryString = http_build_query($query, '', '&', PHP_QUERY_RFC3986);
+        $port = isset($parts['port']) ? ':' . $parts['port'] : '';
+
+        return $parts['scheme'] . '://' . $parts['host'] . $port . $parts['path'] . '?' . $signedQueryString;
     }
     
     

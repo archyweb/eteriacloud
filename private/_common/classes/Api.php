@@ -9,6 +9,7 @@ class Api {
     public $endpoints, $endpointName, $requestData, $BASE_URI, $tokens;
       
     private static $cf_images_hash = '9SuSEzNRJh_MWD3dytly4A';
+    private static $runtime_config = [];
     
     public function __construct($requestData){
 
@@ -23,6 +24,7 @@ class Api {
             "6IY8hCefp0EhhJpqWgMRa83PDLKX98CGJ4UK" => "demo"
         );
         $this->config=require $this->main_root.'/subdomains/'.$this->tokens[$requestData["token"]].'/httpdocs/config-local.php';
+        self::$runtime_config = $this->config;
         $this->db=$this->get_db();
         $this->BASE_URI = "/simple-api/";
         $this->endpoints = array();
@@ -41,7 +43,83 @@ class Api {
     
     public static function getImageUrl(string $image_id, string $variant = 'public'): string
     {
-        return "https://imagedelivery.net/".static::$cf_images_hash."/{$image_id}/{$variant}";
+        $imagesHash = self::envValue(['STORECLOUD_CF_IMAGES_HASH', 'CLOUDFLARE_IMAGES_HASH', 'CF_IMAGES_HASH'], static::$cf_images_hash);
+        $imageUrl = "https://imagedelivery.net/".$imagesHash."/{$image_id}/{$variant}";
+        if (!self::isTruthy(self::envValue(['STORECLOUD_CF_IMAGES_SIGNED_URLS', 'CLOUDFLARE_IMAGES_SIGNED_URLS', 'IMAGES_SIGNED_URLS', 'cf_images_signed_urls'], 'false'))) {
+            return $imageUrl;
+        }
+
+        return self::signImageUrl($imageUrl);
+    }
+
+    private static function signImageUrl(string $image_url): string
+    {
+        $signingKey = self::envValue(['STORECLOUD_CF_IMAGES_SIGNING_KEY', 'CLOUDFLARE_IMAGES_SIGNING_KEY', 'IMAGES_SIGNING_KEY'], '');
+        if (trim($signingKey) === '') {
+            error_log('[Api] Cloudflare Images signing key missing. Returning unsigned URL.');
+            return $image_url;
+        }
+
+        $expiration = (int) self::envValue(['STORECLOUD_CF_IMAGES_URL_EXPIRATION', 'CLOUDFLARE_IMAGES_URL_EXPIRATION', 'IMAGES_URL_EXPIRATION'], '86400');
+        if ($expiration <= 0) {
+            $expiration = 86400;
+        }
+
+        $parts = parse_url($image_url);
+        if (!is_array($parts) || empty($parts['scheme']) || empty($parts['host']) || empty($parts['path'])) {
+            return $image_url;
+        }
+
+        parse_str($parts['query'] ?? '', $query);
+        $query['exp'] = time() + $expiration;
+        unset($query['sig']);
+
+        $queryString = http_build_query($query, '', '&', PHP_QUERY_RFC3986);
+        $stringToSign = $parts['path'] . '?' . $queryString;
+        $query['sig'] = hash_hmac('sha256', $stringToSign, $signingKey);
+
+        $signedQueryString = http_build_query($query, '', '&', PHP_QUERY_RFC3986);
+        $port = isset($parts['port']) ? ':' . $parts['port'] : '';
+
+        return $parts['scheme'] . '://' . $parts['host'] . $port . $parts['path'] . '?' . $signedQueryString;
+    }
+
+    private static function envValue($keys, string $default = ''): string
+    {
+        if (class_exists('ArchyEnv')) {
+            return ArchyEnv::value($keys, $default);
+        }
+
+        $keys = is_array($keys) ? $keys : [$keys];
+        foreach ($keys as $key) {
+            if (isset($_ENV[$key]) && $_ENV[$key] !== '') {
+                return $_ENV[$key];
+            }
+
+            if (isset($_SERVER[$key]) && $_SERVER[$key] !== '') {
+                return $_SERVER[$key];
+            }
+
+            $value = getenv($key);
+            if ($value !== false && $value !== '') {
+                return $value;
+            }
+
+            if (isset(self::$runtime_config[$key]) && self::$runtime_config[$key] !== '') {
+                return (string) self::$runtime_config[$key];
+            }
+        }
+
+        return $default;
+    }
+
+    private static function isTruthy($value): bool
+    {
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        return in_array(strtolower(trim((string) $value)), ['1', 'true', 'yes', 'on'], true);
     }
 	
 	public static function is_serialized($string){
