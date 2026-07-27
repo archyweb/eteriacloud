@@ -13,7 +13,8 @@
 
     <li class="nav-item dropdown" id="notices">
       <a class="nav-link notification-indicator notification-indicator-primary px-0 fa-icon-wait" id="navbarDropdownNotification" role="button" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false" data-hide-on-body-scroll="data-hide-on-body-scroll">
-          <span class="fas fa-bell" data-fa-transform="shrink-6" style="font-size: 33px;"></span><span id="notices_count" class="notification-indicator-number"></span>
+          <span class="fas fa-bell" data-fa-transform="shrink-6" style="font-size: 33px;"></span>
+          <span id="notices_count" class="notification-indicator-number"></span>
       </a>
       <div class="dropdown-menu dropdown-caret dropdown-menu-end dropdown-menu-card dropdown-menu-notification dropdown-caret-bg" aria-labelledby="navbarDropdownNotification">
         <div class="card card-notification shadow-none">
@@ -34,6 +35,20 @@
         </div>
       </div>
     </li>
+
+    <li class="nav-item dropdown">
+        
+        <a class="nav-link d-flex align-items-center dropdown-toggle fa-headset fs-9 pe-1 py-0" href="#" role="button" id="themeSwitchDropdown" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+          <span class="fas fa-headset" data-fa-transform="shrink-6" style="font-size: 33px;"></span>
+        </a>
+        <div class="dropdown-menu dropdown-menu-end dropdown-caret dropdown-menu-card border py-0 mt-3" aria-labelledby="themeSwitchDropdown">
+          <div class="bg-white dark__bg-1000 rounded-2 py-2">
+            <a href="archy/app.php?view=tickets" data-id="archy_tickets" class="dropdown-item eteria-target">Assistenza clienti</a>
+
+          </div>
+        </div>
+        
+    </li>
     
     <li class="nav-item dropdown">
         <a class="nav-link pe-0 ps-2" id="navbarDropdownUser" role="button" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
@@ -47,8 +62,7 @@
 
           <div class="dropdown-divider"></div>
           <a href="archy/app.php?view=password" data-id="archy_password" class="dropdown-item eteria-target">Cambio password</a>
-          <a href="archy/app.php?view=tickets" data-id="archy_tickets" class="dropdown-item eteria-target">Assistenza clienti</a>
-
+          
           <div class="dropdown-divider"></div>
           
           <a href="?do_action=logout" class="dropdown-item">Logout</a>

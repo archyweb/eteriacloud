@@ -48,7 +48,12 @@ class Support{
 		$thread_id=(int)$thread_id;
 		$db=$this->source_db($source);
 		
-		$thread=$db->query("select * from archy_support where thread_id=".$thread_id." order by id");
+		$thread=$db->query("
+			select * from archy_support
+			where thread_id=".$thread_id."
+				or ((thread_id is null or thread_id=0) and id=".$thread_id.")
+			order by id desc
+		");
 		while($post=mysqli_fetch_object($thread)):
 			if($post->subject!=''):
 				$this->subject=$post->subject;
@@ -96,13 +101,47 @@ class Support{
 	}
 	
 	private function insert_ticket_reply($db,$thread_id,$reply,$is_customer){
-		$db->query("
+		$result=$db->query("
 			insert into archy_support set
 			thread_id=".(int)$thread_id.",
 			user='".addslashes($this->app->user_full_name)."',
 			is_customer=".(int)$is_customer.",
 			request='".addslashes($reply)."'
 		");
+		if(!$result):
+			throw new RuntimeException('Inserimento risposta non riuscito: '.$db->error);
+		endif;
+	}
+
+	private function resolve_customer_thread_id($customer_db,$support_thread_id){
+		$support_thread_id=(int)$support_thread_id;
+		$thread=$customer_db->query("select id, thread_id from archy_support where thread_id=".$support_thread_id." order by id limit 1");
+		if($thread && $thread->num_rows>0):
+			$row=mysqli_fetch_object($thread);
+			return (int)$row->thread_id>0? (int)$row->thread_id : (int)$row->id;
+		endif;
+
+		$where=[];
+		if(trim((string)$this->subject)!=''):
+			$where[]="subject='".$customer_db->real_escape_string($this->subject)."'";
+		endif;
+		if(trim((string)$this->domain)!=''):
+			$where[]="domain='".$customer_db->real_escape_string($this->domain)."'";
+		endif;
+		if(trim((string)$this->reply_to)!=''):
+			$where[]="reply_to='".$customer_db->real_escape_string($this->reply_to)."'";
+		endif;
+		if(empty($where)):
+			return $support_thread_id;
+		endif;
+
+		$thread=$customer_db->query("select id, thread_id from archy_support where ".implode(' and ',$where)." order by id limit 1");
+		if($thread && $thread->num_rows>0):
+			$row=mysqli_fetch_object($thread);
+			return (int)$row->thread_id>0? (int)$row->thread_id : (int)$row->id;
+		endif;
+
+		return $support_thread_id;
 	}
 	
 	private function send_ticket_email($message,$params,$context){
@@ -154,6 +193,7 @@ class Support{
 				continue;
 			endif;
 			$row=array_slice(array_pad($row,count($headers),''),0,count($headers));
+			$row=array_map('trim',$row);
 			$customer=array_combine($headers,$row);
 			if(!$customer || !isset($customer['customer']) || trim((string)$customer['customer'])==''):
 				continue;
@@ -177,19 +217,97 @@ class Support{
 		return preg_replace('/^www\./','',$domain);
 	}
 
+	private function customer_has_explicit_domain_column($customer){
+		foreach(['subdomain','domain','customer_domain'] as $field):
+			if(array_key_exists($field,$customer)):
+				return true;
+			endif;
+		endforeach;
+		return false;
+	}
+
+	private function customer_matches_explicit_domain($customer,$domain){
+		$domain=$this->normalize_ticket_domain($domain);
+		if($domain==''):
+			return false;
+		endif;
+		$domain_parts=explode('.',$domain);
+		$ticket_subdomain=$domain_parts[0];
+
+		foreach(['subdomain','domain','customer_domain'] as $field):
+			if(!isset($customer[$field]) || trim((string)$customer[$field])==''):
+				continue;
+			endif;
+			$values=preg_split('/[,|]+/',(string)$customer[$field]);
+			foreach($values as $value):
+				$value=$this->normalize_ticket_domain($value);
+				if($value==$domain || $value==$ticket_subdomain):
+					return true;
+				endif;
+			endforeach;
+		endforeach;
+		return false;
+	}
+
+	private function customer_match_tokens($customer){
+		$tokens=[];
+		$customer_name=isset($customer['customer'])? strtolower(trim((string)$customer['customer'])) : '';
+		if($customer_name!=''):
+			$normalized=preg_replace('/[^a-z0-9]+/',' ',strtolower($customer_name));
+			$parts=array_values(array_filter(explode(' ',trim($normalized)),'strlen'));
+			$tokens[]=implode('', $parts);
+			foreach($parts as $part):
+				if(!in_array($part,['archyart','archymedia','master','customer','cliente'],true)):
+					$tokens[]=$part;
+				endif;
+			endforeach;
+			if(count($parts)>1):
+				$tokens[]=end($parts);
+			endif;
+		endif;
+		return array_unique(array_filter($tokens,'strlen'));
+	}
+
 	private function customer_matches_domain($customer,$domain){
 		$domain=$this->normalize_ticket_domain($domain);
 		$customer_name=isset($customer['customer'])? $this->normalize_ticket_domain($customer['customer']) : '';
-		if($domain=='' || $customer_name==''):
+		if($domain==''):
+			return false;
+		endif;
+		$domain_parts=explode('.',$domain);
+		$ticket_subdomain=$domain_parts[0];
+
+		$has_explicit_domain=false;
+		foreach(['subdomain','domain','customer_domain'] as $field):
+			if(isset($customer[$field]) && trim((string)$customer[$field])!=''):
+				$has_explicit_domain=true;
+				$values=preg_split('/[,|]+/',(string)$customer[$field]);
+				foreach($values as $value):
+					$value=$this->normalize_ticket_domain($value);
+					if($value==$domain || $value==$ticket_subdomain):
+						return true;
+					endif;
+				endforeach;
+			endif;
+		endforeach;
+		if($has_explicit_domain):
+			return false;
+		endif;
+
+		if($customer_name==''):
 			return false;
 		endif;
 		if($domain==$customer_name):
 			return true;
 		endif;
-		$domain_parts=explode('.',$domain);
 		if($domain_parts[0]==$customer_name):
 			return true;
 		endif;
+		foreach($this->customer_match_tokens($customer) as $token):
+			if($token==$domain_parts[0] || $token==$domain):
+				return true;
+			endif;
+		endforeach;
 		if(isset($customer['main_root']) && trim((string)$customer['main_root'])!=''):
 			$root=str_replace('\\','/',trim((string)$customer['main_root']));
 			$root_domain=$this->normalize_ticket_domain(basename(rtrim($root,'/')));
@@ -201,7 +319,25 @@ class Support{
 	}
 
 	private function ticket_customer_config(){
-		foreach($this->load_support_customers() as $customer):
+		$customers=$this->load_support_customers();
+		$use_explicit_domain=false;
+		foreach($customers as $customer):
+			if($this->customer_has_explicit_domain_column($customer)):
+				$use_explicit_domain=true;
+				break;
+			endif;
+		endforeach;
+
+		if($use_explicit_domain):
+			foreach($customers as $customer):
+				if($this->customer_matches_explicit_domain($customer,$this->domain)):
+					return $customer;
+				endif;
+			endforeach;
+			return NULL;
+		endif;
+
+		foreach($customers as $customer):
 			if($this->customer_matches_domain($customer,$this->domain)):
 				return $customer;
 			endif;
@@ -275,8 +411,9 @@ class Support{
 		$customer_sync=true;
 		try{
 			$customer_db=$this->connect_ticket_customer_db();
-			$this->insert_ticket_reply($customer_db,$thread_id,$reply,0);
-			$this->notify_customer_care_reply($thread_id,$customer_db);
+			$customer_thread_id=$this->resolve_customer_thread_id($customer_db,$thread_id);
+			$this->insert_ticket_reply($customer_db,$customer_thread_id,$reply,0);
+			$this->notify_customer_care_reply($customer_thread_id,$customer_db);
 		}catch(Throwable $e){
 			$customer_sync=false;
 			set_message("danger","Risposta salvata nel supporto, ma non sincronizzata nel DB cliente. Dettaglio: ".htmlspecialchars($e->getMessage(),ENT_QUOTES,'UTF-8'));
@@ -344,7 +481,7 @@ class Support{
 			from (
 				select min(id) as min_id, max(id) as max_id, count(*) as total_posts
 				from archy_support
-				group by thread_id
+				group by case when thread_id is null or thread_id=0 then id else thread_id end
 			) as thread_stats
 			inner join archy_support as first_posts on first_posts.id=thread_stats.min_id
 			inner join archy_support as last_posts on last_posts.id=thread_stats.max_id
@@ -352,7 +489,7 @@ class Support{
 		");
 		$response='';
 		while($thread=mysqli_fetch_object($threads)):
-			$thread_id=$thread->thread_id;
+			$thread_id=(int)$thread->thread_id>0? $thread->thread_id : $thread->id;
 			$is_closed=(int)$thread->closed;
 			$last_is_customer=(int)$thread->last_is_customer;
 			$attention=$is_closed? '<span class="badge bg-danger">Chiuso</span>' : ($last_is_customer? '<span class="badge bg-warning">Da gestire</span>' : '<span class="badge bg-info">Risposto</span>');
@@ -429,7 +566,7 @@ class Support{
 			from (
 				select min(id) as min_id, max(id) as max_id, count(*) as total_posts
 				from archy_support
-				group by thread_id
+				group by case when thread_id is null or thread_id=0 then id else thread_id end
 			) as thread_stats
 			inner join archy_support as first_posts on first_posts.id=thread_stats.min_id
 			inner join archy_support as last_posts on last_posts.id=thread_stats.max_id
@@ -437,7 +574,7 @@ class Support{
 		");
 		$response='';
 		while($thread=mysqli_fetch_object($threads)):
-			$thread_id=$thread->thread_id;
+			$thread_id=(int)$thread->thread_id>0? $thread->thread_id : $thread->id;
 			$is_closed=(int)$thread->closed;
 			$last_is_customer=(int)$thread->last_is_customer;
 			$attention=$is_closed? '<span class="badge bg-secondary">Chiuso</span>' : ($last_is_customer? '<span class="badge bg-warning text-dark">In attesa</span>' : '<span class="badge bg-success">Nuova risposta</span>');

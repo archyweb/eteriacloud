@@ -115,16 +115,19 @@ else:
    
    <div class="row g-3">
         <div class="col-12 mb-3">
-             <div class="row justify-content-center justify-content-sm-between">
-                 <div class="col-sm-auto text-center">
-                     <h5 class="d-inline-block p-2">Tickets</h5>
-                 </div>
-                 <div class="col-sm-auto d-flex justify-content-center mt-1 mt-sm-0">
-                     <div class="btn-group" role="group">
-                         <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#ticketsModal"><span class="fas fa-plus"></span> Apri Ticket </button>
+             <div class="row">
+                 <div class="d-flex justify-content-end mt-1 mt-sm-0">
+                     <div class="btn-toolbar" role="toolbar" aria-label="Eteria toolbars">
+                         <div class="btn-group me-2 mb-2" role="group">
+                             <a class="btn btn-secondary" href="javascript:void(0)" onClick="location.reload()" data-toggle="tooltip" data-placement="bottom" title="Aggiorna scheda"><span class="fas fa-sync"></span> Ricarica</a>
+                             <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#ticketsModal"><span class="fas fa-plus"></span> Apri Ticket</button>
+                         </div>
                      </div>
-                 </div>	
+                 </div>
              </div>
+         </div>
+         <div class="col-12 pl-4 w-100">
+             <h4 class="d-inline-block">Tickets</h4>
          </div>
          <div class="col-sm-12">
              <table class="table mb-0 data-table fs-10 table-striped overflow-hidden" id="tickets">
@@ -138,7 +141,7 @@ else:
                              pageLength:10,
                              scrollX:true,
                              scrollCollapse:true,
-                             order: [[9,'desc']],
+                             order: [[0,'desc']],
                              language: data_table_it_IT
                      });
              }
