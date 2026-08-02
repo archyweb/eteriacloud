@@ -5,6 +5,7 @@ class CoreUpdate
     protected $options = array();
     protected $mainRoot;
     protected $updateRoot;
+    protected $appliedPackageDestinations = array();
 
     public function __construct($options = array())
     {
@@ -21,6 +22,7 @@ class CoreUpdate
         $options = array_merge($this->options, is_array($options) ? $options : array());
         $dryRun = $this->toBool(isset($options['dry_run']) ? $options['dry_run'] : true);
         $mode = isset($options['mode']) ? strtolower(trim((string) $options['mode'])) : 'db';
+        $this->appliedPackageDestinations = array();
 
         if (!in_array($mode, array('db', 'files', 'all'), true)) {
             throw new RuntimeException('Modalita aggiornamento non valida: ' . $mode . '.');
@@ -66,20 +68,29 @@ class CoreUpdate
         try {
             $mysqli = $this->connectCustomer($customer);
             $this->assertUpdateRequirement($mysqli, $manifest);
-            $fileTarget = in_array($mode, array('files', 'all'), true) ? $this->resolveCustomerRoot($customer) : null;
+            $fileTargets = in_array($mode, array('files', 'all'), true) ? $this->resolveCustomerFileTargets($customer) : null;
 
             if ($dryRun) {
+                $filePlan = $fileTargets ? $this->planPackage($package, $fileTargets) : null;
                 $mysqli->close();
-                return array(
+                $result = array(
                     'customer' => $customer['customer'],
                     'database' => $customer['db_name'],
-                    'file_target' => $fileTarget,
+                    'file_targets' => $fileTargets,
                     'status' => 'success',
                     'message' => 'Controlli aggiornamento riusciti. Nessuna modifica eseguita per dry-run.',
                 );
+
+                if ($filePlan) {
+                    $result['file_plan'] = $filePlan;
+                }
+
+                return $result;
             }
 
             $applied = array();
+            $fileResult = null;
+            $backupPath = null;
 
             if (in_array($mode, array('db', 'all'), true)) {
                 $this->executeSql($mysqli, $sql);
@@ -87,23 +98,26 @@ class CoreUpdate
             }
 
             if (in_array($mode, array('files', 'all'), true)) {
-                $this->applyPackage($package, $fileTarget);
+                $fileResult = $this->applyPackage($package, $fileTargets, $customer, $manifest);
+                $backupPath = isset($fileResult['backup_path']) ? $fileResult['backup_path'] : null;
                 $applied[] = 'files';
             }
 
             $this->recordUpdate($mysqli, $manifest, 'success', false, 'Aggiornamento eseguito correttamente.', array(
                 'customer' => $customer['customer'],
                 'database' => $customer['db_name'],
-                'file_target' => $fileTarget,
+                'file_targets' => $fileTargets,
                 'mode' => $mode,
                 'applied' => $applied,
-            ));
+                'file_result' => $fileResult,
+            ), $backupPath);
 
             $mysqli->close();
             return array(
                 'customer' => $customer['customer'],
                 'database' => $customer['db_name'],
-                'file_target' => $fileTarget,
+                'file_targets' => $fileTargets,
+                'file_result' => $fileResult,
                 'status' => 'success',
                 'message' => 'Aggiornamento eseguito correttamente.',
             );
@@ -176,7 +190,7 @@ class CoreUpdate
         }
     }
 
-    protected function recordUpdate($mysqli, $manifest, $status, $dryRun, $message, $details)
+    protected function recordUpdate($mysqli, $manifest, $status, $dryRun, $message, $details, $backupPath = null)
     {
         $version = isset($manifest['version']) ? $manifest['version'] : '';
         if ($version === '') {
@@ -193,13 +207,14 @@ class CoreUpdate
             'package_sha256' => isset($manifest['sha256']) ? $manifest['sha256'] : null,
             'sql_file' => isset($manifest['sql']) ? $manifest['sql'] : null,
             'sql_sha256' => isset($manifest['sql_sha256']) ? $manifest['sql_sha256'] : null,
+            'backup_path' => $backupPath,
             'message' => $message,
             'details' => $detailsJson,
         );
 
         $query = "
             INSERT INTO `archy_core_updates`
-                (`version`, `requires_version`, `status`, `dry_run`, `package_file`, `package_sha256`, `sql_file`, `sql_sha256`, `started_at`, `finished_at`, `message`, `details`, `created_at`)
+                (`version`, `requires_version`, `status`, `dry_run`, `package_file`, `package_sha256`, `sql_file`, `sql_sha256`, `backup_path`, `started_at`, `finished_at`, `message`, `details`, `created_at`)
             VALUES
                 (" . $this->sqlValue($mysqli, $values['version']) . ",
                  " . $this->sqlValue($mysqli, $values['requires_version']) . ",
@@ -209,6 +224,7 @@ class CoreUpdate
                  " . $this->sqlValue($mysqli, $values['package_sha256']) . ",
                  " . $this->sqlValue($mysqli, $values['sql_file']) . ",
                  " . $this->sqlValue($mysqli, $values['sql_sha256']) . ",
+                 " . $this->sqlValue($mysqli, $values['backup_path']) . ",
                  NOW(),
                  NOW(),
                  " . $this->sqlValue($mysqli, $values['message']) . ",
@@ -222,6 +238,7 @@ class CoreUpdate
                 `package_sha256` = VALUES(`package_sha256`),
                 `sql_file` = VALUES(`sql_file`),
                 `sql_sha256` = VALUES(`sql_sha256`),
+                `backup_path` = VALUES(`backup_path`),
                 `finished_at` = VALUES(`finished_at`),
                 `message` = VALUES(`message`),
                 `details` = VALUES(`details`)
@@ -445,6 +462,7 @@ class CoreUpdate
                 'enabled' => $this->valueByKey($row, $map, 'enabled'),
                 'main_root' => $this->valueByKey($row, $map, 'main_root'),
                 'subdomain_root' => $this->valueByKey($row, $map, 'subdomain_root'),
+                'subdomain_key' => $this->valueByKey($row, $map, 'subdomain_key'),
             );
 
             if ($customer['enabled'] === '') {
@@ -473,6 +491,7 @@ class CoreUpdate
             'enabled' => array('enabled', 'active', 'attivo', 'abilitato', 'abilita'),
             'main_root' => array('main_root', 'root', 'project_root', 'percorso_root', 'percorso'),
             'subdomain_root' => array('subdomain_root', 'httpdocs', 'document_root', 'percorso_httpdocs'),
+            'subdomain_key' => array('subdomain_key', 'subdomain', 'sottodominio', 'codice_sottodominio', 'subdomain_name'),
         );
 
         $map = array();
@@ -515,31 +534,162 @@ class CoreUpdate
         return trim($value, '_');
     }
 
-    protected function resolveCustomerRoot($customer)
+    protected function resolveCustomerFileTargets($customer)
     {
-        $root = '';
+        $mainRoot = isset($customer['main_root']) && trim((string) $customer['main_root']) !== ''
+            ? trim((string) $customer['main_root'])
+            : $this->mainRoot;
 
-        if (isset($customer['main_root']) && trim((string) $customer['main_root']) !== '') {
-            $root = trim((string) $customer['main_root']);
-        } elseif (isset($customer['subdomain_root']) && trim((string) $customer['subdomain_root']) !== '') {
-            $root = trim((string) $customer['subdomain_root']);
+        $mainRoot = str_replace('\\', '/', $mainRoot);
+        $mainRootReal = realpath($mainRoot);
+
+        if (!$mainRootReal || !is_dir($mainRootReal)) {
+            throw new RuntimeException('Root principale non valida per aggiornamento files: ' . $mainRoot);
         }
 
-        if ($root === '') {
-            throw new RuntimeException('Percorso root cliente mancante per aggiornamento files.');
+        $mainRootReal = str_replace('\\', '/', $mainRootReal);
+        $subdomainKey = isset($customer['subdomain_key']) ? trim((string) $customer['subdomain_key']) : '';
+        $subdomainRoot = isset($customer['subdomain_root']) ? trim((string) $customer['subdomain_root']) : '';
+
+        if ($subdomainRoot === '' && $subdomainKey !== '') {
+            if (!preg_match('/^[a-zA-Z0-9._-]+$/', $subdomainKey)) {
+                throw new RuntimeException('Codice sottodominio non valido per ' . $customer['customer'] . ': ' . $subdomainKey);
+            }
+            $subdomainRoot = $mainRootReal . '/subdomains/' . $subdomainKey . '/httpdocs';
         }
 
-        $root = str_replace('\\', '/', $root);
-        $real = realpath($root);
-
-        if (!$real || !is_dir($real)) {
-            throw new RuntimeException('Percorso root cliente non valido: ' . $root);
+        $subdomainRootReal = null;
+        if ($subdomainRoot !== '') {
+            $subdomainRoot = str_replace('\\', '/', $subdomainRoot);
+            $subdomainRootReal = realpath($subdomainRoot);
+            if (!$subdomainRootReal || !is_dir($subdomainRootReal)) {
+                throw new RuntimeException('Root sottodominio non valida per aggiornamento files: ' . $subdomainRoot);
+            }
+            $subdomainRootReal = str_replace('\\', '/', $subdomainRootReal);
         }
 
-        return str_replace('\\', '/', $real);
+        return array(
+            'main_root' => $mainRootReal,
+            'httpdocs_root' => $mainRootReal . '/httpdocs',
+            'subdomain_root' => $subdomainRootReal,
+            'subdomain_key' => $subdomainKey,
+        );
     }
 
-    protected function applyPackage($package, $targetRoot)
+    protected function planPackage($package, $targets)
+    {
+        $plan = $this->readPackageOperations($package, $targets, true);
+        $plan['operations_limited'] = count($plan['operations']) > 80;
+        $plan['operations'] = $this->limitOperations($plan['operations']);
+        return $plan;
+    }
+
+    protected function applyPackage($package, $targets, $customer, $manifest)
+    {
+        $plan = $this->readPackageOperations($package, $targets, false);
+        $version = isset($manifest['version']) ? preg_replace('/[^a-zA-Z0-9._-]+/', '-', (string) $manifest['version']) : 'update';
+        $customerName = isset($customer['customer']) ? preg_replace('/[^a-zA-Z0-9._-]+/', '-', (string) $customer['customer']) : 'customer';
+        $backupPath = $this->updateRoot . '/backups/' . $version . '-' . date('Ymd-His') . '-' . $customerName . '.zip';
+        $backupZip = null;
+        $copied = 0;
+        $skipped = 0;
+        $backedUp = 0;
+        $operations = array();
+
+        $zip = new ZipArchive();
+        if ($zip->open($package['path']) !== true) {
+            throw new RuntimeException('Impossibile aprire pacchetto aggiornamento files.');
+        }
+
+        foreach ($plan['operations'] as $operation) {
+            $destinationKey = strtolower($operation['destination']);
+            if (isset($this->appliedPackageDestinations[$destinationKey])) {
+                $skipped++;
+                $operations[] = array(
+                    'entry' => $operation['entry'],
+                    'destination' => $operation['destination'],
+                    'action' => 'skipped_duplicate',
+                );
+                continue;
+            }
+
+            if (is_file($operation['destination'])) {
+                if ($backupZip === null) {
+                    $this->ensureDirectory(dirname($backupPath));
+                    $backupZip = new ZipArchive();
+                    if ($backupZip->open($backupPath, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
+                        $zip->close();
+                        throw new RuntimeException('Impossibile creare backup aggiornamento files: ' . $backupPath);
+                    }
+                }
+
+                $backupName = ltrim(str_replace($targets['main_root'], '', $operation['destination']), '/');
+                if ($backupName === '') {
+                    $backupName = basename($operation['destination']);
+                }
+                $backupContent = file_get_contents($operation['destination']);
+                if ($backupContent === false || !$backupZip->addFromString($backupName, $backupContent)) {
+                    $backupZip->close();
+                    $zip->close();
+                    throw new RuntimeException('Impossibile aggiungere file al backup: ' . $operation['destination']);
+                }
+                $backedUp++;
+            }
+
+            $stream = $zip->getStream($operation['entry']);
+            if (!$stream) {
+                if ($backupZip) {
+                    $backupZip->close();
+                }
+                $zip->close();
+                throw new RuntimeException('Impossibile leggere file dal pacchetto: ' . $operation['entry']);
+            }
+
+            $this->ensureDirectory(dirname($operation['destination']));
+            $write = fopen($operation['destination'], 'wb');
+            if (!$write) {
+                fclose($stream);
+                if ($backupZip) {
+                    $backupZip->close();
+                }
+                $zip->close();
+                throw new RuntimeException('Impossibile scrivere file aggiornato: ' . $operation['destination']);
+            }
+
+            while (!feof($stream)) {
+                fwrite($write, fread($stream, 1048576));
+            }
+            fclose($write);
+            fclose($stream);
+
+            $this->appliedPackageDestinations[$destinationKey] = true;
+            $copied++;
+            $operations[] = array(
+                'entry' => $operation['entry'],
+                'destination' => $operation['destination'],
+                'action' => 'copied',
+            );
+        }
+
+        if ($backupZip) {
+            $backupZip->close();
+        } else {
+            $backupPath = null;
+        }
+
+        $zip->close();
+
+        return array(
+            'package_source' => isset($package['source']) ? $package['source'] : null,
+            'backup_path' => $backupPath,
+            'copied' => $copied,
+            'skipped_duplicate' => $skipped,
+            'backed_up' => $backedUp,
+            'operations' => $this->limitOperations($operations),
+        );
+    }
+
+    protected function readPackageOperations($package, $targets, $dryRun)
     {
         if (!is_array($package) || empty($package['path']) || !is_file($package['path'])) {
             throw new RuntimeException('Pacchetto aggiornamento files non disponibile.');
@@ -550,20 +700,120 @@ class CoreUpdate
             throw new RuntimeException('Impossibile aprire pacchetto aggiornamento files.');
         }
 
+        $operations = array();
+        $total = 0;
         for ($i = 0; $i < $zip->numFiles; $i++) {
             $entry = $zip->getNameIndex($i);
-            if (!$this->isSafeZipEntry($entry)) {
-                $zip->close();
-                throw new RuntimeException('Percorso non consentito nel pacchetto: ' . $entry);
+            if (substr($entry, -1) === '/') {
+                continue;
             }
-        }
 
-        if (!$zip->extractTo($targetRoot)) {
-            $zip->close();
-            throw new RuntimeException('Impossibile estrarre pacchetto in: ' . $targetRoot);
+            $destination = $this->resolvePackageEntryDestination($entry, $targets);
+            $total++;
+            $operations[] = array(
+                'entry' => $entry,
+                'destination' => $destination,
+                'exists' => is_file($destination),
+                'action' => $dryRun ? (is_file($destination) ? 'would_replace' : 'would_create') : 'pending',
+            );
         }
 
         $zip->close();
+
+        return array(
+            'package_source' => isset($package['source']) ? $package['source'] : null,
+            'total_files' => $total,
+            'operations' => $operations,
+            'operations_limited' => false,
+        );
+    }
+
+    protected function resolvePackageEntryDestination($entry, $targets)
+    {
+        $entry = str_replace('\\', '/', (string) $entry);
+        $entry = ltrim($entry, '/');
+
+        if (!$this->isSafeZipEntry($entry)) {
+            throw new RuntimeException('Percorso non consentito nel pacchetto: ' . $entry);
+        }
+
+        if ($this->isForbiddenPackageEntry($entry)) {
+            throw new RuntimeException('File non consentito nel pacchetto: ' . $entry);
+        }
+
+        if (strpos($entry, 'subdomain/httpdocs/') === 0) {
+            if (empty($targets['subdomain_root'])) {
+                throw new RuntimeException('Il pacchetto contiene file per sottodominio ma nel CSV manca subdomain_key o subdomain_root.');
+            }
+
+            $relative = substr($entry, strlen('subdomain/httpdocs/'));
+            $destination = rtrim($targets['subdomain_root'], '/') . '/' . $relative;
+            $this->assertPathWithinRoot($destination, $targets['subdomain_root']);
+            return $destination;
+        }
+
+        if (strpos($entry, 'private/') === 0) {
+            $destination = rtrim($targets['main_root'], '/') . '/' . $entry;
+            $this->assertPathWithinRoot($destination, $targets['main_root']);
+            return $destination;
+        }
+
+        if (strpos($entry, 'httpdocs/') === 0) {
+            $destination = rtrim($targets['main_root'], '/') . '/' . $entry;
+            $this->assertPathWithinRoot($destination, $targets['main_root']);
+            return $destination;
+        }
+
+        throw new RuntimeException('Percorso pacchetto non riconosciuto: ' . $entry . '. Usa private/, httpdocs/ oppure subdomain/httpdocs/.');
+    }
+
+    protected function isForbiddenPackageEntry($entry)
+    {
+        $entry = strtolower(str_replace('\\', '/', (string) $entry));
+        $basename = basename($entry);
+
+        if (in_array($basename, array('.env', 'config-local.php', 'customers.csv', 'customers.xlsx', 'customers.xls'), true)) {
+            return true;
+        }
+
+        $blockedPrefixes = array(
+            'private/_common/update/logs/',
+            'private/_common/update/backups/',
+            'private/_common/update/runtime/',
+            'assets/storage/',
+            'assets/uploads/',
+            'httpdocs/assets/storage/',
+            'httpdocs/assets/uploads/',
+            'subdomain/httpdocs/assets/storage/',
+            'subdomain/httpdocs/assets/uploads/',
+        );
+
+        foreach ($blockedPrefixes as $prefix) {
+            if (strpos($entry, $prefix) === 0) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    protected function assertPathWithinRoot($path, $root)
+    {
+        $path = strtolower(str_replace('\\', '/', $this->normalizePath($path)));
+        $root = strtolower(rtrim(str_replace('\\', '/', $this->normalizePath($root)), '/'));
+
+        if ($path !== $root && strpos($path, $root . '/') !== 0) {
+            throw new RuntimeException('Destinazione fuori dalla root consentita: ' . $path);
+        }
+    }
+
+    protected function limitOperations($operations)
+    {
+        if (count($operations) <= 80) {
+            return $operations;
+        }
+
+        return array_slice($operations, 0, 80);
     }
 
     protected function isSafeZipEntry($entry)

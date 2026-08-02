@@ -10,52 +10,65 @@ class ArchyAuth extends Auth
         parent::__construct($dbh, $config);
     }
 
+    public function loginWithPasswordPolicy(string $email, string $password, int $remember = 0, string $captcha_response = ''): array
+    {
+        $email = trim(mb_strtolower($email, 'UTF-8'));
+        $loginCheck = $this->verifyLoginCredentials($email, $password, $remember, $captcha_response);
+
+        if (!empty($loginCheck['error'])) {
+            return $loginCheck;
+        }
+
+        $passwordPolicy = $this->validateStrictPassword($password, $email);
+
+        if (!$passwordPolicy['valid']) {
+            return [
+                'error' => true,
+                'force_password_change_required' => true,
+                'message' => 'La password attuale non rispetta i nuovi requisiti di sicurezza. Imposta una nuova password per accedere.',
+                'email' => $email,
+                'rules' => $passwordPolicy['rules']
+            ];
+        }
+
+        $sessiondata = $this->addSession((int) $loginCheck['user']['uid'], (bool) $remember);
+
+        if (!$sessiondata) {
+            return [
+                'error' => true,
+                'hash' => '',
+                'message' => $this->__lang('system.error') . ' #01'
+            ];
+        }
+
+        return [
+            'error' => false,
+            'message' => $this->__lang('logged_in'),
+            'hash' => $sessiondata['hash'],
+            'expire' => $sessiondata['expire'],
+            'cookie_name' => $this->config->cookie_name
+        ];
+    }
+
     public function startEmailOtpLogin(string $email, string $password, int $remember = 0, string $captcha_response = ''): array
     {
         $email = trim(mb_strtolower($email, 'UTF-8'));
-        $return = [
-            'error' => true,
-            'message' => 'Credenziali non valide.'
-        ];
+        $loginCheck = $this->verifyLoginCredentials($email, $password, $remember, $captcha_response, true);
 
-        $block_status = $this->isBlocked();
-
-        if ($block_status == 'verify' && !$this->checkCaptcha($captcha_response)) {
-            $return['message'] = $this->__lang('captcha.verify_code_invalid');
-            return $return;
+        if (!empty($loginCheck['error'])) {
+            return $loginCheck;
         }
 
-        if ($block_status == 'block') {
-            $return['message'] = $this->__lang('user.temporary_banned');
-            return $return;
-        }
+        $passwordPolicy = $this->validateStrictPassword($password, $email);
 
-        $validateEmail = $this->validateEmail($email);
-        $validatePassword = $this->validatePasswordLength($password);
-
-        if ($validateEmail['error'] == 1 || $validatePassword['error'] == 1 || ($remember != 0 && $remember != 1)) {
-            $this->addAttempt();
-            return $return;
-        }
-
-        $uid = $this->getUID($email);
-
-        if (!$uid) {
-            $this->addAttempt();
-            return $return;
-        }
-
-        $user = $this->getBaseUser($uid);
-
-        if (!$user || !$this->password_verify_with_rehash($password, $user['password'], $uid)) {
-            $this->addAttempt();
-            return $return;
-        }
-
-        if ($user['isactive'] != 1) {
-            $this->addAttempt();
-            $return['message'] = $this->__lang('account.not_activated');
-            return $return;
+        if (!$passwordPolicy['valid']) {
+            return [
+                'error' => true,
+                'force_password_change_required' => true,
+                'message' => 'La password attuale non rispetta i nuovi requisiti di sicurezza. Imposta una nuova password per accedere.',
+                'email' => $email,
+                'rules' => $passwordPolicy['rules']
+            ];
         }
 
         $mailer = $this->config->mailerDriver;
@@ -76,7 +89,7 @@ class ArchyAuth extends Auth
             SET consumed_at = NOW()
             WHERE uid = ?
             AND consumed_at IS NULL
-        ")->execute([$uid]);
+        ")->execute([(int) $loginCheck['user']['uid']]);
 
         $query = $this->dbh->prepare("
             INSERT INTO archy_login_otps
@@ -86,7 +99,7 @@ class ArchyAuth extends Auth
         ");
 
         $query->execute([
-            $uid,
+            (int) $loginCheck['user']['uid'],
             $email,
             $selectorHash,
             password_hash($code, PASSWORD_DEFAULT),
@@ -179,6 +192,75 @@ class ArchyAuth extends Auth
         $altBody = "Il tuo codice di accesso e: " . $code . "\nIl codice scade tra 10 minuti.";
 
         return $this->config->mailerDriver->send($email, $subject, $body, $altBody);
+    }
+
+    private function verifyLoginCredentials(string $email, string $password, int $remember = 0, string $captcha_response = '', bool $genericMessage = false): array
+    {
+        $return = [
+            'error' => true,
+            'hash' => '',
+            'message' => $genericMessage ? 'Credenziali non valide.' : ''
+        ];
+
+        $block_status = $this->isBlocked();
+
+        if ($block_status == 'verify' && !$this->checkCaptcha($captcha_response)) {
+            $return['message'] = $this->__lang('captcha.verify_code_invalid');
+            return $return;
+        }
+
+        if ($block_status == 'block') {
+            $return['message'] = $this->__lang('user.temporary_banned');
+            return $return;
+        }
+
+        $validateEmail = $this->validateEmail($email);
+        $validatePassword = $this->validatePasswordLength($password);
+
+        if ($validateEmail['error'] == 1) {
+            $this->addAttempt();
+            $return['message'] = $genericMessage ? 'Credenziali non valide.' : $validateEmail['message'];
+            return $return;
+        }
+
+        if ($validatePassword['error'] == 1) {
+            $this->addAttempt();
+            $return['message'] = $genericMessage ? 'Credenziali non valide.' : $validatePassword['message'];
+            return $return;
+        }
+
+        if ($remember != 0 && $remember != 1) {
+            $this->addAttempt();
+            $return['message'] = $genericMessage ? 'Credenziali non valide.' : $this->__lang('remember_me_invalid');
+            return $return;
+        }
+
+        $uid = $this->getUID($email);
+
+        if (!$uid) {
+            $this->addAttempt();
+            $return['message'] = $genericMessage ? 'Credenziali non valide.' : $this->__lang('account.not_found');
+            return $return;
+        }
+
+        $user = $this->getBaseUser($uid);
+
+        if (!$user || !$this->password_verify_with_rehash($password, $user['password'], $uid)) {
+            $this->addAttempt();
+            $return['message'] = $genericMessage ? 'Credenziali non valide.' : $this->__lang('account.no_pair_user_and_password');
+            return $return;
+        }
+
+        if ($user['isactive'] != 1) {
+            $this->addAttempt();
+            $return['message'] = $this->__lang('account.not_activated');
+            return $return;
+        }
+
+        return [
+            'error' => false,
+            'user' => $user
+        ];
     }
 
     public function addOrUpdateUser($old_email, $email, $password) {
@@ -336,6 +418,20 @@ class ArchyAuth extends Auth
     public function validateStrictPassword(string $password, string $email = '', string $oldPassword = ''): array {
         $passwordLower = mb_strtolower($password, 'UTF-8');
         $emailLocalPart = '';
+        $siteName = (string) ($this->config->site_name ?? '');
+        $siteTokens = preg_split('/[^A-Za-z0-9]+/', $siteName, -1, PREG_SPLIT_NO_EMPTY);
+        $siteTokens = array_filter(array_map(function ($term) {
+            $term = mb_strtolower($term, 'UTF-8');
+            return mb_strlen($term, 'UTF-8') >= 4 ? $term : '';
+        }, is_array($siteTokens) ? $siteTokens : []));
+        $containsSiteTerm = false;
+
+        foreach ($siteTokens as $siteToken) {
+            if (strpos($passwordLower, $siteToken) !== false) {
+                $containsSiteTerm = true;
+                break;
+            }
+        }
 
         if ($email !== '' && strpos($email, '@') !== false) {
             $emailLocalPart = mb_strtolower(substr($email, 0, strpos($email, '@')), 'UTF-8');
@@ -366,6 +462,10 @@ class ArchyAuth extends Auth
                 'label' => 'Nessuno spazio',
                 'passed' => !preg_match('/\s/', $password)
             ],
+            'pattern' => [
+                'label' => 'Non usa parole con simbolo e numeri finali',
+                'passed' => !preg_match('/^[A-Za-z]{4,}[^A-Za-z0-9\s][0-9]{2,4}$/', $password)
+            ],
             'different' => [
                 'label' => 'Diversa dalla password attuale',
                 'passed' => $oldPassword === '' || !hash_equals($oldPassword, $password)
@@ -373,6 +473,10 @@ class ArchyAuth extends Auth
             'email' => [
                 'label' => 'Non contiene la parte iniziale dell email',
                 'passed' => $emailLocalPart === '' || mb_strlen($emailLocalPart, 'UTF-8') < 4 || strpos($passwordLower, $emailLocalPart) === false
+            ],
+            'site' => [
+                'label' => 'Non contiene il nome del cliente',
+                'passed' => !$containsSiteTerm
             ]
         ];
 
@@ -386,7 +490,7 @@ class ArchyAuth extends Auth
         } catch (\Throwable $e) {
             $rules['strength'] = [
                 'label' => 'Complessita adeguata',
-                'passed' => true
+                'passed' => false
             ];
         }
 
@@ -399,6 +503,62 @@ class ArchyAuth extends Auth
             'rules' => $rules,
             'message' => count($failedRules) === 0 ? 'Password valida.' : 'La nuova password non rispetta tutti i requisiti.'
         ];
+    }
+
+    public function changePasswordStrict(int $uid, string $oldPassword, string $newPassword, string $newPasswordRepeat, string $email = ''): array {
+        $return = [
+            'error' => true,
+            'message' => $this->__lang('system_error')
+        ];
+        $block_status = $this->isBlocked();
+
+        if ($block_status == 'block') {
+            $return['message'] = $this->__lang('user_blocked');
+            return $return;
+        }
+
+        if ($newPassword !== $newPasswordRepeat) {
+            $return['message'] = 'Le nuove password non coincidono.';
+            return $return;
+        }
+
+        $user = $this->getBaseUser($uid);
+
+        if (!$user) {
+            $this->addAttempt();
+            $return['message'] = $this->__lang('system_error') . ' #13';
+            return $return;
+        }
+
+        if ($email === '') {
+            $email = $user['email'] ?? '';
+        }
+
+        $validation = $this->validateStrictPassword($newPassword, $email, $oldPassword);
+
+        if (!$validation['valid']) {
+            return [
+                'error' => true,
+                'message' => $validation['message'],
+                'rules' => $validation['rules']
+            ];
+        }
+
+        if (!password_verify($oldPassword, $user['password'])) {
+            $this->addAttempt();
+            $return['message'] = $this->__lang('password_incorrect');
+            return $return;
+        }
+
+        $newPassword = self::getHash($newPassword, $this->config->bcrypt_cost);
+        $query = "UPDATE {$this->config->table_users} SET password = ? WHERE id = ?";
+        $query_prepared = $this->dbh->prepare($query);
+        $query_prepared->execute([$newPassword, $uid]);
+
+        $return['error'] = false;
+        $return['message'] = $this->__lang('password_changed');
+
+        return $return;
     }
 
     public function changePasswordByEmailStrict(string $email, string $oldPassword, string $newPassword, string $newPasswordRepeat): array {
@@ -437,7 +597,7 @@ class ArchyAuth extends Auth
             ];
         }
 
-        $response = $this->changePassword($uid, $oldPassword, $newPassword, $newPasswordRepeat);
+        $response = $this->changePasswordStrict($uid, $oldPassword, $newPassword, $newPasswordRepeat, $email);
 
         if (empty($response['error'])) {
             $this->logoutAll($uid);

@@ -61,10 +61,10 @@ class AppActions extends ExtraActions{
 			$result=$this->broadcast_notice_payload($payload,$category,$recipients_mode,isset($_POST['customers'])? $_POST['customers'] : []);
 			if($result['target']==0):
 				set_message("warning","Nessun cliente destinatario selezionato o disponibile.");
-			elseif($result['failed']>0):
-				set_message("warning","Broadcast completato con errori: ".$result['success']." inviate, ".$result['failed']." errori.");
+			elseif($result['failed']>0 || $result['email_failed']>0):
+				set_message("warning","Broadcast completato con errori: ".$result['success']." notifiche inviate, ".$result['failed']." errori DB, ".$result['email_success']." e-mail inviate, ".$result['email_failed']." e-mail non inviate.");
 			else:
-				set_message("success","Broadcast completato: ".$result['success']." notifiche inviate.");
+				set_message("success","Broadcast completato: ".$result['success']." notifiche inviate, ".$result['email_success']." e-mail inviate.");
 			endif;
 		endif;
 		
@@ -88,7 +88,7 @@ class AppActions extends ExtraActions{
 		$customers=$this->load_notice_customers();
 		$selected_customers=array_map('strval', is_array($selected_customers)? $selected_customers : []);
 		$selected_lookup=array_fill_keys($selected_customers,true);
-		$result=['success'=>0,'failed'=>0,'target'=>0];
+		$result=['success'=>0,'failed'=>0,'target'=>0,'email_target'=>0,'email_success'=>0,'email_failed'=>0];
 		
 		foreach($customers as $customer):
 			if($mode=='selected' && !isset($selected_lookup[$customer['customer']])):
@@ -100,9 +100,14 @@ class AppActions extends ExtraActions{
 				$mysqli=$this->connect_notice_customer($customer);
 				$this->ensure_customer_notice_columns($mysqli);
 				$this->insert_notice_for_customer($mysqli,$payload,$category);
+				$email_result=$this->email_notice_to_customer_users($mysqli,$payload,$category,$customer);
+				$result['email_target']+=$email_result['target'];
+				$result['email_success']+=$email_result['success'];
+				$result['email_failed']+=$email_result['failed'];
 				$result['success']++;
 			}catch(Throwable $e){
 				$result['failed']++;
+				error_log('[NoticeBroadcast] customer='.$customer['customer'].' db='.($customer['db_name'] ?? '-').' error='.$e->getMessage());
 			}
 			if($mysqli instanceof mysqli):
 				$mysqli->close();
@@ -137,6 +142,7 @@ class AppActions extends ExtraActions{
 				continue;
 			endif;
 			$row=array_slice(array_pad($row,count($headers),''),0,count($headers));
+			$row=array_map('trim',$row);
 			$customer=array_combine($headers,$row);
 			if(!$customer || !isset($customer['customer']) || trim((string)$customer['customer'])==''):
 				continue;
@@ -200,6 +206,96 @@ class AppActions extends ExtraActions{
 		if(!$mysqli->query("alter table archy_notices add column ".$column." ".$definition)):
 			throw new RuntimeException($mysqli->error);
 		endif;
+	}
+
+	private function email_notice_to_customer_users($mysqli,$payload,$category,$customer){
+		global $app;
+		$result=['target'=>0,'success'=>0,'failed'=>0];
+		$settings=$app->get_settings($domain='notifications');
+		$sender_email=isset($settings->sender_email)? trim((string)$settings->sender_email) : '';
+		$sender_name=isset($settings->sender_name) && trim((string)$settings->sender_name)!=''? trim((string)$settings->sender_name) : ($this->config['customer_name'] ?? 'Archy Art');
+		if($sender_email==''):
+			error_log('[NoticeBroadcast] sender email not configured for mail notification.');
+			return $result;
+		endif;
+
+		$users=$mysqli->query("select email, name, surname from archy_users where id>2 and email<>'' order by id");
+		if(!$users):
+			error_log('[NoticeBroadcast] archy_users query failed for customer='.$customer['customer'].' db='.($customer['db_name'] ?? '-').' error='.$mysqli->error);
+			return $result;
+		endif;
+
+		$parts=$this->notice_mail_parts($payload);
+		$subject='Nuova notifica';
+		if($parts['title']!=''):
+			$subject=$parts['title'];
+		endif;
+		$message_html='
+			<p>Hai ricevuto una nuova notifica nel gestionale.</p>
+			<hr>
+			<p><strong>'.htmlspecialchars($parts['title']!=''? $parts['title'] : 'Notifica',ENT_QUOTES,'UTF-8').'</strong></p>
+			<p>'.nl2br(htmlspecialchars($parts['body'],ENT_QUOTES,'UTF-8')).'</p>
+			<hr>
+			<p>Accedi al tuo pannello per visualizzare il dettaglio della notifica.</p>
+		';
+		$mailer=new Message();
+		$sent_lookup=[];
+
+		while($user=mysqli_fetch_object($users)):
+			$email=trim((string)$user->email);
+			if($email=='' || !filter_var($email,FILTER_VALIDATE_EMAIL)):
+				continue;
+			endif;
+			$email_key=strtolower($email);
+			if(isset($sent_lookup[$email_key])):
+				continue;
+			endif;
+			$sent_lookup[$email_key]=true;
+			$result['target']++;
+			$recipient_name=trim(trim((string)$user->name).' '.trim((string)$user->surname));
+			$sent=$mailer->email([
+				'recipient_name'=>$recipient_name!=''? $recipient_name : $email,
+				'recipient_mail'=>$email,
+				'sender_name'=>$sender_name,
+				'sender_mail'=>$sender_email,
+				'subject'=>$subject,
+				'message'=>$message_html
+			]);
+			if($sent):
+				$result['success']++;
+			else:
+				$result['failed']++;
+				error_log('[NoticeBroadcast] email failed customer='.$customer['customer'].' db='.($customer['db_name'] ?? '-').' to='.$email.' error='.$mailer->last_error);
+			endif;
+		endwhile;
+
+		return $result;
+	}
+
+	private function notice_mail_parts($payload){
+		$html=isset($payload['notice'])? (string)$payload['notice'] : '';
+		$title='';
+		$body_html=$html;
+		if(preg_match('/<strong[^>]*>(.*?)<\/strong>\s*(<br\s*\/?>)?/is',$html,$matches)):
+			$title=html_entity_decode(trim(strip_tags($matches[1])),ENT_QUOTES,'UTF-8');
+			$body_html=preg_replace('/<strong[^>]*>.*?<\/strong>\s*(<br\s*\/?>)?/is','',$html,1);
+		endif;
+		$body=html_entity_decode(trim(strip_tags(str_ireplace(['<br>','<br/>','<br />'],"\n",$body_html))),ENT_QUOTES,'UTF-8');
+		if($title==''):
+			$full_text=html_entity_decode(trim(strip_tags(str_ireplace(['<br>','<br/>','<br />'],"\n",$html))),ENT_QUOTES,'UTF-8');
+			$lines=preg_split('/\r\n|\r|\n/',$full_text);
+			foreach($lines as $line):
+				$line=trim($line);
+				if($line!=''):
+					$title=$line;
+					break;
+				endif;
+			endforeach;
+		endif;
+		if($body==''):
+			$body=$title;
+		endif;
+		return ['title'=>$title,'body'=>$body];
 	}
 	
 	// main actions and helpers

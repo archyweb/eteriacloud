@@ -494,8 +494,7 @@ if (
        
         
     public function login($username, $password) {
-        $res = $this->auth->login($username, $password);
-        return $res;
+        return $this->auth->loginWithPasswordPolicy($username, $password);
     }
 
     public function logout(){
@@ -534,7 +533,7 @@ if (
             return;
         }
 
-	    $resp = $this->auth->changePassword($curUser['uid'], $oldPassword, $newPassword, $newPasswordRepeat, $captcha_response = null);
+	    $resp = $this->auth->changePasswordStrict($curUser['uid'], $oldPassword, $newPassword, $newPasswordRepeat, $curUser['email'] ?? '');
         set_message($resp['error'] ? "error" : "success", $resp['message']);
         header('location: '.$referer);
     }
@@ -6854,6 +6853,10 @@ function form_value($str){
 }
 function set_message($class,$message){
 	//@$_SESSION['system-message'].='<div class="alert alert-'.$class.' border-0 d-flex align-items-center" role="alert">'.$message.' <span class="glyphicon glyphicon-remove"></span></div>';
+        if (!isset($_SESSION['system-message'])) {
+            $_SESSION['system-message'] = '';
+        }
+
         switch ($class) {
             case 'danger':
                 $message_icon = 'fa-times-circle';
