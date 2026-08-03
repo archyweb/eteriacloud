@@ -10,23 +10,29 @@ class ArchyAuth extends Auth
         parent::__construct($dbh, $config);
     }
 
+    public function login(string $email, string $password, int $remember = 0, string $captcha_response = ''): array
+    {
+        return $this->loginWithPasswordPolicy($email, $password, $remember, $captcha_response);
+    }
+
     public function loginWithPasswordPolicy(string $email, string $password, int $remember = 0, string $captcha_response = ''): array
     {
-        $email = trim(mb_strtolower($email, 'UTF-8'));
+        $email = trim($email);
         $loginCheck = $this->verifyLoginCredentials($email, $password, $remember, $captcha_response);
 
         if (!empty($loginCheck['error'])) {
             return $loginCheck;
         }
 
-        $passwordPolicy = $this->validateStrictPassword($password, $email);
+        $accountEmail = $loginCheck['user']['email'] ?? $email;
+        $passwordPolicy = $this->validateStrictPassword($password, $accountEmail);
 
         if (!$passwordPolicy['valid']) {
             return [
                 'error' => true,
                 'force_password_change_required' => true,
                 'message' => 'La password attuale non rispetta i nuovi requisiti di sicurezza. Imposta una nuova password per accedere.',
-                'email' => $email,
+                'email' => $accountEmail,
                 'rules' => $passwordPolicy['rules']
             ];
         }
@@ -52,21 +58,22 @@ class ArchyAuth extends Auth
 
     public function startEmailOtpLogin(string $email, string $password, int $remember = 0, string $captcha_response = ''): array
     {
-        $email = trim(mb_strtolower($email, 'UTF-8'));
+        $email = trim($email);
         $loginCheck = $this->verifyLoginCredentials($email, $password, $remember, $captcha_response, true);
 
         if (!empty($loginCheck['error'])) {
             return $loginCheck;
         }
 
-        $passwordPolicy = $this->validateStrictPassword($password, $email);
+        $accountEmail = $loginCheck['user']['email'] ?? $email;
+        $passwordPolicy = $this->validateStrictPassword($password, $accountEmail);
 
         if (!$passwordPolicy['valid']) {
             return [
                 'error' => true,
                 'force_password_change_required' => true,
                 'message' => 'La password attuale non rispetta i nuovi requisiti di sicurezza. Imposta una nuova password per accedere.',
-                'email' => $email,
+                'email' => $accountEmail,
                 'rules' => $passwordPolicy['rules']
             ];
         }
@@ -100,7 +107,7 @@ class ArchyAuth extends Auth
 
         $query->execute([
             (int) $loginCheck['user']['uid'],
-            $email,
+            $accountEmail,
             $selectorHash,
             password_hash($code, PASSWORD_DEFAULT),
             $remember,
@@ -109,7 +116,7 @@ class ArchyAuth extends Auth
             $agent
         ]);
 
-        if (!$this->sendLoginOtpEmail($email, $code)) {
+        if (!$this->sendLoginOtpEmail($accountEmail, $code)) {
             $this->dbh->prepare("UPDATE archy_login_otps SET consumed_at = NOW() WHERE selector_hash = ?")->execute([$selectorHash]);
             $return['message'] = 'Impossibile inviare il codice di accesso. Riprova piu tardi.';
             return $return;
@@ -119,7 +126,7 @@ class ArchyAuth extends Auth
             'error' => false,
             'message' => 'Ti abbiamo inviato un codice di accesso via email.',
             'otp_token' => $selector,
-            'email' => $email
+            'email' => $accountEmail
         ];
     }
 
