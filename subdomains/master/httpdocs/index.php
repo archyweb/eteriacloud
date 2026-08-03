@@ -1,4 +1,7 @@
 <?php
+if (session_status() !== PHP_SESSION_ACTIVE) {
+    session_start();
+}
 $main_root = dirname(dirname(dirname(dirname(__FILE__))));
 $subdomain_root = dirname(__FILE__);
 $child_template_root = $subdomain_root . '/admin_template_child';

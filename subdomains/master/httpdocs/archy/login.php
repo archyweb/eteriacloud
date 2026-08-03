@@ -1,4 +1,7 @@
-<?php 
+<?php
+    if (session_status() !== PHP_SESSION_ACTIVE) {
+        session_start();
+    }
     $main_root = dirname(dirname(dirname(dirname(dirname(__FILE__)))));
     $subdomain_root = dirname(dirname(__FILE__));
     $child_template_root = $subdomain_root . '/admin_template_child';    
@@ -14,11 +17,14 @@
     $login_otp_success = false;
     $login_otp_email = '';
     $login_otp_token = '';
+    $force_password_email = '';
+    $force_password_message = '';
+    $force_password_success = false;
     $mode = str_replace('-', '_', $_GET['mode'] ?? 'login');
     $options = require $main_root . '/private/_common/config.php';
     $login_config = require $subdomain_root . '/config-local.php';
     $login_email_otp_enabled = !empty($login_config['login_email_otp']);
-    $allowed_modes = ['login', 'forgot_password', 'reset_password'];
+    $allowed_modes = ['login', 'forgot_password', 'reset_password', 'force_password_change'];
 
     if ($login_email_otp_enabled) {
         $allowed_modes[] = 'login_otp';
@@ -64,6 +70,20 @@
                 $reset_password_message = $reset_password_success
                     ? 'Password reimpostata correttamente. A breve verrai reindirizzato alla pagina di login.'
                     : $reset['message'];
+            } elseif ($form_action === 'force_password_change') {
+                $login_mode = 'force_password_change';
+                $force_password_email = $_POST['force_email'] ?? '';
+                $forceChange = $app->auth->changePasswordByEmailStrict(
+                    $force_password_email,
+                    $_POST['old_password'] ?? '',
+                    $_POST['new_password'] ?? '',
+                    $_POST['new_password_repeat'] ?? ''
+                );
+                $force_password_success = empty($forceChange['error']);
+                $reset_password_redirect = $force_password_success;
+                $force_password_message = $force_password_success
+                    ? 'Password aggiornata correttamente. A breve verrai reindirizzato alla pagina di login.'
+                    : $forceChange['message'];
             } elseif ($form_action === 'login_otp') {
                 $login_mode = 'login_otp';
                 $login_otp_token = $_POST['otp_token'] ?? '';
@@ -96,7 +116,11 @@
                     $login = $app->login($_POST['username'], $_POST['password']);
                 }
 
-                if ($login['error']!='') {
+                if (!empty($login['force_password_change_required'])) {
+                    $login_mode = 'force_password_change';
+                    $force_password_email = $login['email'] ?? ($_POST['username'] ?? '');
+                    $force_password_message = $login['message'];
+                } elseif ($login['error']!='') {
                     $login_error_message = $login['message'];
                 } else {
                     if ($login_email_otp_enabled) {
@@ -106,8 +130,8 @@
                         $login_otp_token = $login['otp_token'] ?? '';
                         $login_otp_email = $login['email'] ?? ($_POST['username'] ?? '');
                     } else {
-                    $app->dashboardPage();
-                    exit;
+                        $app->dashboardPage();
+                        exit;
                     }
                 }
             }
@@ -116,6 +140,8 @@
                 $forgot_password_message = $e->getMessage();
             } elseif ($login_mode === 'reset_password') {
                 $reset_password_message = $e->getMessage();
+            } elseif ($login_mode === 'force_password_change') {
+                $force_password_message = $e->getMessage();
             } else {
                 $login_error_message = $e->getMessage();
             }

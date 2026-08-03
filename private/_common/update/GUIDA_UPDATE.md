@@ -9,6 +9,7 @@ File pubblici, da mettere nel sottodominio `update`:
 
 ```text
 subdomains/update/httpdocs/manifest.json
+subdomains/update/httpdocs/manifest-patch.json
 subdomains/update/httpdocs/sql/*.sql
 subdomains/update/httpdocs/packages/*.zip
 ```
@@ -19,9 +20,23 @@ File privati, solo sul master:
 private/_common/update/customers.csv
 private/_common/update/logs/
 private/_common/update/runtime/
+private/_common/update/backups/
 ```
 
 Il file `customers.csv` non va mai pubblicato e non va mai messo su Git.
+
+Struttura server prevista:
+
+```text
+/var/www/vhosts/archyart.it/
+  httpdocs/
+  private/
+    _common/
+  subdomains/
+    master/httpdocs/
+    update/httpdocs/
+    cliente-demo/httpdocs/
+```
 
 ## 1. Scegliere la versione
 
@@ -91,7 +106,22 @@ Creare uno zip in:
 subdomains/update/httpdocs/packages/archyart-update-2026.07.17.1.zip
 ```
 
-Lo zip deve contenere i file con la stessa gerarchia della root gestionale.
+Per aggiornamenti leggeri, lo zip deve usare percorsi logici. Non bisogna
+duplicare i file per ogni cliente.
+
+```text
+subdomain/httpdocs/percorso/file.php
+private/_common/percorso/file.php
+httpdocs/percorso/file.php
+```
+
+La procedura li copia cosi:
+
+```text
+subdomain/httpdocs/... -> /var/www/vhosts/archyart.it/subdomains/{subdomain_key}/httpdocs/...
+private/...            -> /var/www/vhosts/archyart.it/private/...
+httpdocs/...           -> /var/www/vhosts/archyart.it/httpdocs/...
+```
 
 Non includere mai:
 
@@ -199,23 +229,48 @@ php subdomains/master/httpdocs/srv/core-update/run.php --manifest=https://update
 
 ## 9. Test aggiornamento files
 
-Per aggiornare file, nel CSV clienti serve anche `main_root` o `subdomain_root`:
+Per aggiornare file nei sottodomini, nel CSV clienti serve anche
+`subdomain_key`:
 
 ```csv
-customer;db_host;db_port;db_name;db_user;db_pass;enabled;main_root
-cliente-demo;localhost;3306;nome_database;utente;password;1;/var/www/vhosts/cliente.it
+customer;db_host;db_port;db_name;db_user;db_pass;enabled;subdomain_key
+cliente-demo;localhost;3306;nome_database;utente;password;1;cliente-demo
+```
+
+`subdomain_key` e il nome della cartella sotto `subdomains/`. La root
+principale viene ricavata automaticamente dal master.
+
+Per i patch leggeri usare un manifest dedicato:
+
+```text
+subdomains/update/httpdocs/manifest-patch.json
+```
+
+Esempio:
+
+```json
+{
+  "version": "2026.07.27.1",
+  "requires": "",
+  "package": "packages/archyart-patch-2026.07.27.1.zip",
+  "sha256": "hash_sha256_dello_zip",
+  "sql": "",
+  "sql_sha256": "",
+  "changelog": "Aggiornamento leggero files.",
+  "created_at": "2026-07-27"
+}
 ```
 
 Test:
 
 ```bash
-php subdomains/master/httpdocs/srv/core-update/run.php --manifest=https://update.archyart.it/manifest.json --customers=private/_common/update/customers.csv --mode=files --dry-run=1
+php subdomains/master/httpdocs/srv/core-update/run.php --manifest=https://update.archyart.it/manifest-patch.json --customers=private/_common/update/customers.csv --mode=files --dry-run=1
 ```
 
 Esecuzione:
 
 ```bash
-php subdomains/master/httpdocs/srv/core-update/run.php --manifest=https://update.archyart.it/manifest.json --customers=private/_common/update/customers.csv --mode=files --dry-run=0
+php subdomains/master/httpdocs/srv/core-update/run.php --manifest=https://update.archyart.it/manifest-patch.json --customers=private/_common/update/customers.csv --mode=files --dry-run=0
 ```
 
 ## 10. Aggiornamento DB + files insieme

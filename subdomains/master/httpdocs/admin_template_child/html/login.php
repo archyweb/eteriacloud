@@ -35,6 +35,16 @@ if ($turnstileSiteKey === '' && is_readable($envPath)) {
 }
 
 $loginMode = isset($login_mode) ? $login_mode : 'login';
+$passwordMinimumScore = isset($app) ? max(3, (int) $app->auth->config->password_min_score) : 3;
+$passwordForbiddenTerms = [];
+$siteName = $login_config['customer_name'] ?? '';
+
+foreach (preg_split('/[^A-Za-z0-9]+/', $siteName, -1, PREG_SPLIT_NO_EMPTY) as $term) {
+    $term = strtolower($term);
+    if (strlen($term) >= 4) {
+        $passwordForbiddenTerms[] = $term;
+    }
+}
 ?>
 <!DOCTYPE html>
 <html data-bs-theme="light" lang="en-US" dir="ltr">
@@ -132,6 +142,7 @@ $loginMode = isset($login_mode) ? $login_mode : 'login';
                                 $loginTitles = [
                                   'forgot_password' => 'Password dimenticata',
                                   'reset_password' => 'Reimposta password',
+                                  'force_password_change' => 'Cambio password richiesto',
                                   'login_otp' => 'Codice di accesso',
                                   'login' => 'Account Login'
                                 ];
@@ -178,13 +189,16 @@ $loginMode = isset($login_mode) ? $login_mode : 'login';
                                   <label class="form-label" for="new-password-repeat">Ripeti nuova password</label>
                                   <input class="form-control" id="new-password-repeat" name="new_password_repeat" type="password" autocomplete="new-password" required/>
                                 </div>
-                                <ul class="list-unstyled fs-10 mb-3" id="password-rules">
+                                <ul class="list-unstyled fs-10 mb-3" id="password-rules" data-forbidden-terms="<?php echo htmlspecialchars(json_encode(array_values(array_unique($passwordForbiddenTerms))), ENT_QUOTES, 'UTF-8'); ?>">
                                   <li data-rule="length">Almeno 12 caratteri</li>
                                   <li data-rule="lowercase">Almeno una lettera minuscola</li>
                                   <li data-rule="uppercase">Almeno una lettera maiuscola</li>
                                   <li data-rule="number">Almeno un numero</li>
                                   <li data-rule="special">Almeno un carattere speciale</li>
                                   <li data-rule="spaces">Nessuno spazio</li>
+                                  <li data-rule="pattern">Non usa parole con simbolo e numeri finali</li>
+                                  <li data-rule="site">Non contiene il nome del cliente</li>
+                                  <li data-rule="strength">Complessita adeguata</li>
                                   <li data-rule="match">Le password coincidono</li>
                                 </ul>
                                 <div class="mb-3">
@@ -192,6 +206,55 @@ $loginMode = isset($login_mode) ? $login_mode : 'login';
                                   <?php if (!empty($reset_password_message)): ?>
                                     <div class="error mt-2" style="padding:6px;"><?php echo htmlspecialchars($reset_password_message, ENT_QUOTES, 'UTF-8'); ?></div>
                                   <?php endif; ?>
+                                </div>
+                                <div class="text-center">
+                                  <a class="fs-10" href="/archy/login.php">Torna al login</a>
+                                </div>
+                              </form>
+                            <?php endif; ?>
+                          <?php elseif ($loginMode === 'force_password_change'): ?>
+                            <?php if (!empty($force_password_success)): ?>
+                              <div class="alert alert-success mt-2" style="padding:6px;"><?php echo htmlspecialchars($force_password_message, ENT_QUOTES, 'UTF-8'); ?></div>
+                              <div class="text-center">
+                                <a class="fs-10" href="/archy/login.php">Torna al login</a>
+                              </div>
+                            <?php else: ?>
+                              <form name="force-password-change-form" method="post" id="change-password-form">
+                                <input type="hidden" name="form_action" value="force_password_change">
+                                <div class="alert alert-warning mt-2" style="padding:6px;">
+                                  <?php echo htmlspecialchars($force_password_message ?: 'La password attuale non rispetta i nuovi requisiti di sicurezza. Imposta una nuova password per accedere.', ENT_QUOTES, 'UTF-8'); ?>
+                                </div>
+                                <div class="mb-3">
+                                  <label class="form-label" for="force-email">Email</label>
+                                  <input class="form-control" id="force-email" name="force_email" type="email" value="<?php echo htmlspecialchars($force_password_email ?? '', ENT_QUOTES, 'UTF-8'); ?>" readonly required/>
+                                </div>
+                                <div class="mb-3">
+                                  <label class="form-label" for="old-password">Password attuale</label>
+                                  <input class="form-control" id="old-password" name="old_password" type="password" autocomplete="current-password" required autofocus/>
+                                </div>
+                                <div class="mb-3">
+                                  <label class="form-label" for="new-password">Nuova password</label>
+                                  <input class="form-control" id="new-password" name="new_password" type="password" autocomplete="new-password" required/>
+                                </div>
+                                <div class="mb-3">
+                                  <label class="form-label" for="new-password-repeat">Ripeti nuova password</label>
+                                  <input class="form-control" id="new-password-repeat" name="new_password_repeat" type="password" autocomplete="new-password" required/>
+                                </div>
+                                <ul class="list-unstyled fs-10 mb-3" id="password-rules" data-forbidden-terms="<?php echo htmlspecialchars(json_encode(array_values(array_unique($passwordForbiddenTerms))), ENT_QUOTES, 'UTF-8'); ?>">
+                                  <li data-rule="length">Almeno 12 caratteri</li>
+                                  <li data-rule="lowercase">Almeno una lettera minuscola</li>
+                                  <li data-rule="uppercase">Almeno una lettera maiuscola</li>
+                                  <li data-rule="number">Almeno un numero</li>
+                                  <li data-rule="special">Almeno un carattere speciale</li>
+                                  <li data-rule="spaces">Nessuno spazio</li>
+                                  <li data-rule="pattern">Non usa parole con simbolo e numeri finali</li>
+                                  <li data-rule="different">Diversa dalla password attuale</li>
+                                  <li data-rule="site">Non contiene il nome del cliente</li>
+                                  <li data-rule="strength">Complessita adeguata</li>
+                                  <li data-rule="match">Le password coincidono</li>
+                                </ul>
+                                <div class="mb-3">
+                                  <button class="btn btn-primary d-block w-100 mt-3" type="submit" id="change-password-btn" disabled>Aggiorna password</button>
                                 </div>
                                 <div class="text-center">
                                   <a class="fs-10" href="/archy/login.php">Torna al login</a>
@@ -294,6 +357,7 @@ $loginMode = isset($login_mode) ? $login_mode : 'login';
         <script src="/admin_template/vendors/fontawesome/all.min.js"></script>
         <script src="/admin_template/vendors/lodash/lodash.min.js"></script>
         <script src="/admin_template/vendors/list.js/list.min.js"></script>
+        <script src="/admin_template_child/js/zxcvbn.js"></script>
         <script src="/admin_template/assets/js/theme.js"></script>
         <script>
         function onTurnstileSuccess(token) {
@@ -328,7 +392,16 @@ $loginMode = isset($login_mode) ? $login_mode : 'login';
           var newPassword = document.getElementById("new-password");
           var repeatPassword = document.getElementById("new-password-repeat");
           var submitButton = document.getElementById("change-password-btn");
+          var passwordRules = document.getElementById("password-rules");
           var ruleItems = document.querySelectorAll("#password-rules [data-rule]");
+          var forbiddenTerms = [];
+          var minimumScore = <?php echo (int) $passwordMinimumScore; ?>;
+
+          try {
+            forbiddenTerms = JSON.parse(passwordRules.dataset.forbiddenTerms || "[]");
+          } catch (error) {
+            forbiddenTerms = [];
+          }
 
           function setRuleState(name, passed) {
             var item = document.querySelector('#password-rules [data-rule="' + name + '"]');
@@ -345,6 +418,8 @@ $loginMode = isset($login_mode) ? $login_mode : 'login';
             var current = oldPassword.value;
             var password = newPassword.value;
             var repeated = repeatPassword.value;
+            var passwordLower = password.toLowerCase();
+            var strength = typeof zxcvbn === "function" ? zxcvbn(password).score : -1;
             var rules = {
               length: password.length >= 12,
               lowercase: /[a-z]/.test(password),
@@ -352,7 +427,12 @@ $loginMode = isset($login_mode) ? $login_mode : 'login';
               number: /[0-9]/.test(password),
               special: /[^A-Za-z0-9\s]/.test(password),
               spaces: !/\s/.test(password),
+              pattern: !/^[A-Za-z]{4,}[^A-Za-z0-9\s][0-9]{2,4}$/.test(password),
               different: current === "" || current !== password,
+              site: !forbiddenTerms.some(function (term) {
+                return term.length >= 4 && passwordLower.indexOf(term.toLowerCase()) !== -1;
+              }),
+              strength: typeof zxcvbn === "function" && strength >= minimumScore,
               match: password !== "" && password === repeated
             };
             var valid = true;

@@ -2,9 +2,18 @@
 $u = $app->currentUser();
 $userEmail = $u['email'] ?? '';
 $emailLocalPart = '';
+$passwordForbiddenTerms = [];
 
 if ($userEmail !== '' && strpos($userEmail, '@') !== false) {
     $emailLocalPart = strtolower(substr($userEmail, 0, strpos($userEmail, '@')));
+}
+
+$siteName = $app->config['customer_name'] ?? $app->auth->config->site_name ?? '';
+foreach (preg_split('/[^A-Za-z0-9]+/', $siteName, -1, PREG_SPLIT_NO_EMPTY) as $term) {
+    $term = strtolower($term);
+    if (strlen($term) >= 4) {
+        $passwordForbiddenTerms[] = $term;
+    }
 }
 ?>
 
@@ -33,15 +42,17 @@ if ($userEmail !== '' && strpos($userEmail, '@') !== false) {
     </div>
 
     <div class="col-sm-7">
-        <ul class="list-unstyled fs-10 mb-3" id="password-rules" data-email-local="<?php echo htmlspecialchars($emailLocalPart, ENT_QUOTES, 'UTF-8'); ?>">
+        <ul class="list-unstyled fs-10 mb-3" id="password-rules" data-email-local="<?php echo htmlspecialchars($emailLocalPart, ENT_QUOTES, 'UTF-8'); ?>" data-forbidden-terms="<?php echo htmlspecialchars(json_encode(array_values(array_unique($passwordForbiddenTerms))), ENT_QUOTES, 'UTF-8'); ?>">
             <li data-rule="length">Almeno 12 caratteri</li>
             <li data-rule="lowercase">Almeno una lettera minuscola</li>
             <li data-rule="uppercase">Almeno una lettera maiuscola</li>
             <li data-rule="number">Almeno un numero</li>
             <li data-rule="special">Almeno un carattere speciale</li>
             <li data-rule="spaces">Nessuno spazio</li>
+            <li data-rule="pattern">Non usa parole con simbolo e numeri finali</li>
             <li data-rule="different">Diversa dalla password attuale</li>
             <li data-rule="email">Non contiene la parte iniziale dell email</li>
+            <li data-rule="site">Non contiene il nome del cliente</li>
             <li data-rule="strength">Complessita adeguata</li>
             <li data-rule="match">Le password coincidono</li>
         </ul>
@@ -66,7 +77,14 @@ if ($userEmail !== '' && strpos($userEmail, '@') !== false) {
     var passwordRules = document.getElementById("password-rules");
     var ruleItems = document.querySelectorAll("#password-rules [data-rule]");
     var emailLocalPart = (passwordRules.dataset.emailLocal || "").toLowerCase();
+    var forbiddenTerms = [];
     var minimumScore = <?php echo max(3, (int) $app->auth->config->password_min_score); ?>;
+
+    try {
+        forbiddenTerms = JSON.parse(passwordRules.dataset.forbiddenTerms || "[]");
+    } catch (error) {
+        forbiddenTerms = [];
+    }
 
     function setRuleState(name, passed) {
         var item = document.querySelector('#password-rules [data-rule="' + name + '"]');
@@ -92,9 +110,13 @@ if ($userEmail !== '' && strpos($userEmail, '@') !== false) {
             number: /[0-9]/.test(password),
             special: /[^A-Za-z0-9\s]/.test(password),
             spaces: !/\s/.test(password),
+            pattern: !/^[A-Za-z]{4,}[^A-Za-z0-9\s][0-9]{2,4}$/.test(password),
             different: current === "" || current !== password,
             email: emailLocalPart === "" || emailLocalPart.length < 4 || passwordLower.indexOf(emailLocalPart) === -1,
-            strength: strength >= minimumScore,
+            site: !forbiddenTerms.some(function (term) {
+                return term.length >= 4 && passwordLower.indexOf(term.toLowerCase()) !== -1;
+            }),
+            strength: typeof zxcvbn === "function" && strength >= minimumScore,
             match: password !== "" && password === repeated
         };
         var valid = true;
