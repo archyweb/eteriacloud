@@ -24,10 +24,10 @@
 
 
 
-require_once '/var/www/vhosts/archyart.it/private/_common/classes/ArchySearch/QueryBuilder.php';
-require_once '/var/www/vhosts/archyart.it/private/_common/classes/ArchyCore/Schema/ArchySchema.php';
-require_once '/var/www/vhosts/archyart.it/private/_common/classes/ArchyCore/Schema/FieldSearchResolver.php';
-require_once '/var/www/vhosts/archyart.it/private/_common/classes/ArchySearch/Semantic/SemanticAnalyzer.php';
+require_once __DIR__ . '/../../classes/ArchySearch/QueryBuilder.php';
+require_once __DIR__ . '/../../classes/ArchyCore/Schema/ArchySchema.php';
+require_once __DIR__ . '/../../classes/ArchyCore/Schema/FieldSearchResolver.php';
+require_once __DIR__ . '/../../classes/ArchySearch/Semantic/SemanticAnalyzer.php';
 
 class SSP {
 

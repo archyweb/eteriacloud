@@ -43,6 +43,14 @@
         $login_mode = in_array($form_action, $allowed_modes, true) ? $form_action : 'login';
 
         try {
+            // Validate before checking credentials or sending a login OTP.
+            // Unknown actions also reach the password login branch below.
+            if (!in_array($form_action, ['forgot_password', 'reset_password', 'force_password_change', 'login_otp'], true)) {
+                if (!ArchyTurnstile::verify($_POST['cf-turnstile-response'] ?? '')) {
+                    throw new RuntimeException('Verifica anti-bot non riuscita. Riprova completando il controllo di sicurezza.');
+                }
+            }
+
             $app = new App($subdomain_root);
 
             if ($form_action === 'forgot_password') {

@@ -3,6 +3,7 @@
 $physical_path=dirname(__FILE__);
 
 require_once $physical_path.'/ArchyEnv.php';
+require_once $physical_path.'/ArchyTurnstile.php';
 
 /* Auth classes */
 require_once $physical_path.'/zxcvbn-php/Feedback.php';

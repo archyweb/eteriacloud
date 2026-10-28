@@ -1,38 +1,7 @@
 <?php
 $mainRoot = isset($main_root) ? $main_root : dirname(dirname(dirname(dirname(dirname(dirname(__FILE__))))));
-$envPath = $mainRoot . '/private/_common/.env';
-$turnstileSiteKey = getenv('CLOUDFLARE_TURNSTILE_SITEKEY');
-
-if ($turnstileSiteKey === false) {
-    $turnstileSiteKey = '';
-}
-
-if ($turnstileSiteKey === '' && is_readable($envPath)) {
-    $envLines = file($envPath);
-
-    if (is_array($envLines)) {
-        foreach ($envLines as $envLine) {
-            $envLine = trim($envLine);
-
-            if ($envLine === '' || strpos($envLine, '#') === 0) {
-                continue;
-            }
-
-            $separatorPosition = strpos($envLine, '=');
-            if ($separatorPosition === false) {
-                continue;
-            }
-
-            $key = trim(substr($envLine, 0, $separatorPosition));
-            if ($key !== 'CLOUDFLARE_TURNSTILE_SITEKEY') {
-                continue;
-            }
-
-            $turnstileSiteKey = trim(substr($envLine, $separatorPosition + 1), " \t\n\r\0\x0B\"'");
-            break;
-        }
-    }
-}
+require_once $mainRoot . '/private/_common/classes/ArchyEnv.php';
+$turnstileSiteKey = ArchyEnv::value('CLOUDFLARE_TURNSTILE_SITEKEY');
 
 $loginMode = isset($login_mode) ? $login_mode : 'login';
 $passwordMinimumScore = isset($app) ? max(3, (int) $app->auth->config->password_min_score) : 3;
@@ -305,6 +274,7 @@ foreach (preg_split('/[^A-Za-z0-9]+/', $siteName, -1, PREG_SPLIT_NO_EMPTY) as $t
                               
                               <div
                                   class="cf-turnstile"
+                                  data-action="login"
                                   data-sitekey="<?php echo htmlspecialchars($turnstileSiteKey, ENT_QUOTES, 'UTF-8'); ?>"
                                   data-theme="auto"
                                   data-size="flexible"
@@ -361,7 +331,6 @@ foreach (preg_split('/[^A-Za-z0-9]+/', $siteName, -1, PREG_SPLIT_NO_EMPTY) as $t
         <script src="/admin_template/assets/js/theme.js"></script>
         <script>
         function onTurnstileSuccess(token) {
-          console.log("Turnstile success:", token);
           var submitButton = document.getElementById("submit-btn");
           if (submitButton) {
             submitButton.disabled = false;
