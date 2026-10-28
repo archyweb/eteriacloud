@@ -106,7 +106,7 @@ window.archyDashboardCalendar.google = <?php echo json_encode($dashboard_google_
                                     <span class="fas fa-calendar-check me-2"></span>Google collegato
                                 </a>
                             <?php }else{ ?>
-                                <a class="btn btn-falcon-default btn-sm ms-2" href="/archy/google_calendar_connect.php">
+                                <a class="btn btn-falcon-default btn-sm ms-2" href="/archy/google_calendar_start.php?popup=1&t=<?php echo time(); ?>" onclick="var googleCalendarPopup = window.open(this.href, 'googleCalendarOAuth', 'width=640,height=760,menubar=no,toolbar=no,location=yes,status=yes,scrollbars=yes,resizable=yes'); if(!googleCalendarPopup){ window.location.href = this.href; } return false;">
                                     <span class="fas fa-calendar-plus me-2"></span>Collega Google
                                 </a>
                             <?php } ?>
