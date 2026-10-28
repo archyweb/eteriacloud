@@ -8,6 +8,8 @@ return [
     'core_update_manifest_url' => 'https://update.archyart.it/manifest.json',
     'core_update_customers_path' => 'private/_common/update/customers.csv',
     'login_email_otp' => false,
+    'login_otp_required' => false,
+    'login_google_authenticator_otp' => false,
 
     /*
     |--------------------------------------------------------------------------

@@ -27,7 +27,8 @@
     <script>dayjs.locale('it');</script>
         
     <script src="/admin_template/vendors/inputmask/jquery.inputmask.min.js"></script>
-    <script src="/admin_template/assets/js/theme.js"></script>
+    <?php $theme_js_path = $_SERVER['DOCUMENT_ROOT'] . '/admin_template/assets/js/theme.js'; ?>
+    <script src="/admin_template/assets/js/theme.js?v=<?php echo is_file($theme_js_path) ? filemtime($theme_js_path) : time(); ?>"></script>
     
     <script type="text/javascript">
         var intent = '<?php echo @$_GET['intent']?>';

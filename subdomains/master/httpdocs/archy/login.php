@@ -17,17 +17,36 @@
     $login_otp_success = false;
     $login_otp_email = '';
     $login_otp_token = '';
+    $login_otp_choice_message = '';
+    $login_otp_choice_email = '';
+    $login_otp_choice_token = '';
+    $login_totp_message = '';
+    $login_totp_email = '';
+    $login_totp_token = '';
+    $login_totp_setup_required = false;
+    $login_totp_secret = '';
+    $login_totp_qr_data_uri = '';
     $force_password_email = '';
     $force_password_message = '';
     $force_password_success = false;
     $mode = str_replace('-', '_', $_GET['mode'] ?? 'login');
     $options = require $main_root . '/private/_common/config.php';
     $login_config = require $subdomain_root . '/config-local.php';
-    $login_email_otp_enabled = !empty($login_config['login_email_otp']);
+    $login_email_otp_enabled = true;
+    $login_google_authenticator_otp_enabled = true;
+    $login_otp_enabled = $login_email_otp_enabled || $login_google_authenticator_otp_enabled;
     $allowed_modes = ['login', 'forgot_password', 'reset_password', 'force_password_change'];
+
+    if ($login_otp_enabled) {
+        $allowed_modes[] = 'login_otp_choice';
+    }
 
     if ($login_email_otp_enabled) {
         $allowed_modes[] = 'login_otp';
+    }
+
+    if ($login_google_authenticator_otp_enabled) {
+        $allowed_modes[] = 'login_totp';
     }
 
     $login_mode = in_array($mode, $allowed_modes, true) ? $mode : 'login';
@@ -44,6 +63,16 @@
 
         try {
             $app = new App($subdomain_root);
+
+            if (in_array($form_action, ['login_otp_choice', 'login_totp'], true)) {
+                $choiceToken = $_POST['otp_choice_token'] ?? $_POST['totp_token'] ?? '';
+                $choice = $_SESSION['archy_login_otp_choices'][hash('sha256', $choiceToken)] ?? null;
+                if ($choice && ($choice['expires'] ?? 0) >= time()) {
+                    $methods = $app->auth->securityMethods((int) $choice['uid']);
+                    $login_email_otp_enabled = $methods['email'];
+                    $login_google_authenticator_otp_enabled = $methods['google'];
+                }
+            }
 
             if ($form_action === 'forgot_password') {
                 $forgot_password_email = $_POST['forgot_email'] ?? '';
@@ -106,9 +135,80 @@
                         exit;
                     }
                 }
+            } elseif ($form_action === 'login_otp_choice') {
+                $login_mode = 'login_otp_choice';
+                $login_otp_choice_token = $_POST['otp_choice_token'] ?? '';
+                $login_otp_choice_email = $_POST['otp_choice_email'] ?? '';
+                $otp_method = $_POST['otp_method'] ?? '';
+
+                if (!$login_otp_enabled) {
+                    $login_error_message = 'Accesso con doppia autenticazione non attivo.';
+                    $login_mode = 'login';
+                } elseif ($otp_method === 'email') {
+                    if (!$login_email_otp_enabled) {
+                        $login_otp_choice_message = 'Accesso con codice email non attivo.';
+                    } else {
+                        $login = $app->auth->startEmailOtpLoginFromChoice($login_otp_choice_token);
+
+                        if (!empty($login['error'])) {
+                            $login_otp_choice_message = $login['message'];
+                        } else {
+                            $login_mode = 'login_otp';
+                            $login_otp_message = $login['message'];
+                            $login_otp_success = true;
+                            $login_otp_token = $login['otp_token'] ?? '';
+                            $login_otp_email = $login['email'] ?? $login_otp_choice_email;
+                        }
+                    }
+                } elseif ($otp_method === 'google') {
+                    if (!$login_google_authenticator_otp_enabled) {
+                        $login_otp_choice_message = 'Accesso con Google Authenticator non attivo.';
+                    } else {
+                        $login = $app->auth->startTotpLoginFromChoice($login_otp_choice_token);
+                        $login_mode = 'login_totp';
+                        $login_totp_message = $login['message'] ?? '';
+                        $login_totp_email = $login['email'] ?? $login_otp_choice_email;
+                        $login_totp_token = $login['totp_token'] ?? $login_otp_choice_token;
+                        $login_totp_setup_required = !empty($login['totp_setup_required']);
+                        $login_totp_secret = $login['totp_secret'] ?? '';
+                        $login_totp_qr_data_uri = $login['totp_qr_data_uri'] ?? '';
+                    }
+                } else {
+                    $login_otp_choice_message = 'Scegli un metodo di verifica.';
+                }
+            } elseif ($form_action === 'login_totp') {
+                $login_mode = 'login_totp';
+                $login_totp_token = $_POST['totp_token'] ?? '';
+                $login_totp_email = $_POST['totp_email'] ?? '';
+
+                if (!$login_google_authenticator_otp_enabled) {
+                    $login_error_message = 'Accesso con Google Authenticator non attivo.';
+                    $login_mode = 'login';
+                } else {
+                    $login = $app->auth->completeTotpLogin(
+                        $login_totp_token,
+                        $_POST['totp_code'] ?? ''
+                    );
+
+                    if (!empty($login['error'])) {
+                        $login_totp_message = $login['message'];
+                        $prompt = $app->auth->startTotpLoginFromChoice($login_totp_token);
+
+                        if (empty($prompt['error'])) {
+                            $login_totp_email = $prompt['email'] ?? $login_totp_email;
+                            $login_totp_token = $prompt['totp_token'] ?? $login_totp_token;
+                            $login_totp_setup_required = !empty($prompt['totp_setup_required']);
+                            $login_totp_secret = $prompt['totp_secret'] ?? '';
+                            $login_totp_qr_data_uri = $prompt['totp_qr_data_uri'] ?? '';
+                        }
+                    } else {
+                        $app->dashboardPage();
+                        exit;
+                    }
+                }
             } else {
-                if ($login_email_otp_enabled) {
-                    $login = $app->auth->startEmailOtpLogin(
+                if ($login_otp_enabled || !empty($login_config['login_otp_required'])) {
+                    $login = $app->auth->prepareOtpLoginChoice(
                         $_POST['username'] ?? '',
                         $_POST['password'] ?? ''
                     );
@@ -123,12 +223,16 @@
                 } elseif ($login['error']!='') {
                     $login_error_message = $login['message'];
                 } else {
-                    if ($login_email_otp_enabled) {
-                        $login_mode = 'login_otp';
-                        $login_otp_message = $login['message'];
-                        $login_otp_success = true;
-                        $login_otp_token = $login['otp_token'] ?? '';
-                        $login_otp_email = $login['email'] ?? ($_POST['username'] ?? '');
+                    if (!empty($login['authenticated'])) {
+                        $app->dashboardPage();
+                        exit;
+                    } elseif ($login_otp_enabled) {
+                        $login_email_otp_enabled = !empty($login['methods']['email']);
+                        $login_google_authenticator_otp_enabled = !empty($login['methods']['google']);
+                        $login_mode = 'login_otp_choice';
+                        $login_otp_choice_message = $login['message'];
+                        $login_otp_choice_token = $login['otp_choice_token'] ?? '';
+                        $login_otp_choice_email = $login['email'] ?? ($_POST['username'] ?? '');
                     } else {
                         $app->dashboardPage();
                         exit;
@@ -142,6 +246,10 @@
                 $reset_password_message = $e->getMessage();
             } elseif ($login_mode === 'force_password_change') {
                 $force_password_message = $e->getMessage();
+            } elseif ($login_mode === 'login_otp_choice') {
+                $login_otp_choice_message = $e->getMessage();
+            } elseif ($login_mode === 'login_totp') {
+                $login_totp_message = $e->getMessage();
             } else {
                 $login_error_message = $e->getMessage();
             }

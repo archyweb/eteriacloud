@@ -5513,18 +5513,30 @@ var calendar = renderCalendar(appCalendar, {
             type: "POST",
             dataType: 'json',
             url: "/archy/get_calendar.php?do=add",
-            data: 'title='+calendarTitle+'&start='+calendarStart+'&end='+calendarEnd+'&allDay='+calendarAllDay+'&className='+calendarClassName+'&description='+calendarDescription,
+            data: {
+              title: calendarTitle,
+              start: calendarStart,
+              end: calendarEnd,
+              allDay: calendarAllDay ? '1' : '0',
+              className: calendarClassName,
+              description: calendarDescription
+            },
             cache: false,
             success: function(data){
+                if (!data || data.success !== true) {
+                    alert(data && data.error ? data.error : "Errore durante il salvataggio dell'evento.");
+                    return;
+                }
+
                 e.target.reset();
                 window.bootstrap.Modal.getInstance(addEventModal).hide();
-                
+                window.location.reload();
             },
             error: function (request, status, error) {
                 console.log(request.responseText);
+                alert("Errore durante il salvataggio dell'evento.");
             }
 	});
-        window.location.reload();
     });
   }
   addEventModal && addEventModal.addEventListener(Events.SHOWN_BS_MODAL, function (_ref14) {

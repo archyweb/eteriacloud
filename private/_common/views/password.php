@@ -17,32 +17,36 @@ foreach (preg_split('/[^A-Za-z0-9]+/', $siteName, -1, PREG_SPLIT_NO_EMPTY) as $t
 }
 ?>
 
-<form method="post" class="row g-3 needs-validation" novalidate action="/archy/app.php?do_action=changePassword" id="change-password-form">
-    <div class="col-12 mb-3">
-        <div class="row justify-content-center justify-content-sm-between">
-            <div class="col-sm-auto text-center">
-                <h5 class="d-inline-block p-2">Cambio password</h5>
-            </div>
-        </div>
+<form method="post" class="row g-3 needs-validation" novalidate action="<?php echo htmlspecialchars($passwordFormAction ?? '/archy/app.php?do_action=changePassword', ENT_QUOTES, 'UTF-8'); ?>" id="change-password-form">
+    <?php if (isset($securityCsrf)): ?>
+    <input type="hidden" name="security_csrf" value="<?php echo htmlspecialchars($securityCsrf, ENT_QUOTES, 'UTF-8'); ?>">
+    <input type="hidden" name="security_action" value="password">
+    <?php endif; ?>
+    <div class="col-12">
+        <h5 class="mb-0">Cambio password</h5>
     </div>
 
-    <div class="col-sm-7">
+    <div class="col-12 col-lg-5">
+        <div class="mb-3">
         <label class="form-label" for="old-password">Password attuale</label>
         <input type="password" class="form-control" name="old_password" id="old-password" autocomplete="current-password" required>
-    </div>
+        </div>
 
-    <div class="col-sm-7">
+        <div class="mb-3">
         <label class="form-label" for="new-password">Nuova password</label>
-        <input type="password" class="form-control" name="new_password" id="new-password" autocomplete="new-password" required>
-    </div>
+        <input type="password" class="form-control" name="new_password" id="new-password" autocomplete="new-password" aria-describedby="password-rules" required>
+        </div>
 
-    <div class="col-sm-7">
+        <div class="mb-3">
         <label class="form-label" for="new-password-repeat">Ripeti nuova password</label>
         <input type="password" class="form-control" name="new_password_repeat" id="new-password-repeat" autocomplete="new-password" required>
+        </div>
+        <button type="submit" id="change-password-btn" class="btn btn-primary" disabled><span class="fas fa-key me-1"></span>Cambia password</button>
     </div>
 
-    <div class="col-sm-7">
-        <ul class="list-unstyled fs-10 mb-3" id="password-rules" data-email-local="<?php echo htmlspecialchars($emailLocalPart, ENT_QUOTES, 'UTF-8'); ?>" data-forbidden-terms="<?php echo htmlspecialchars(json_encode(array_values(array_unique($passwordForbiddenTerms))), ENT_QUOTES, 'UTF-8'); ?>">
+    <div class="col-12 col-lg-7 ps-lg-4">
+        <h6 class="mb-2">Requisiti della password</h6>
+        <ul class="list-unstyled fs-9 mb-0 lh-lg" id="password-rules" data-email-local="<?php echo htmlspecialchars($emailLocalPart, ENT_QUOTES, 'UTF-8'); ?>" data-forbidden-terms="<?php echo htmlspecialchars(json_encode(array_values(array_unique($passwordForbiddenTerms))), ENT_QUOTES, 'UTF-8'); ?>">
             <li data-rule="length">Almeno 12 caratteri</li>
             <li data-rule="lowercase">Almeno una lettera minuscola</li>
             <li data-rule="uppercase">Almeno una lettera maiuscola</li>
@@ -58,9 +62,6 @@ foreach (preg_split('/[^A-Za-z0-9]+/', $siteName, -1, PREG_SPLIT_NO_EMPTY) as $t
         </ul>
     </div>
 
-    <div class="col-sm-7">
-        <button type="submit" id="change-password-btn" class="btn btn-primary" disabled>Cambia password</button>
-    </div>
 </form>
 
 <script>

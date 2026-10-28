@@ -60,6 +60,7 @@ public $user_id;
 	function __construct(string $subdomain_root){
 
             parent::__construct($subdomain_root);
+            $this->auth->configureSecurity($this->config);
             
             $this->subdomain_root = $subdomain_root;
             

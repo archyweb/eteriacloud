@@ -1,0 +1,23 @@
+CREATE TABLE IF NOT EXISTS archy_notice_broadcasts (
+  id int unsigned NOT NULL AUTO_INCREMENT,
+  title varchar(190) NOT NULL DEFAULT '',
+  notice mediumtext NULL,
+  category varchar(32) NOT NULL DEFAULT 'general',
+  priority varchar(16) NOT NULL DEFAULT 'normal',
+  recipients_mode varchar(32) NOT NULL DEFAULT 'all',
+  target_count int unsigned NOT NULL DEFAULT 0,
+  success_count int unsigned NOT NULL DEFAULT 0,
+  failed_count int unsigned NOT NULL DEFAULT 0,
+  email_target int unsigned NOT NULL DEFAULT 0,
+  email_success int unsigned NOT NULL DEFAULT 0,
+  email_failed int unsigned NOT NULL DEFAULT 0,
+  customers_json mediumtext NULL,
+  failed_customers_json mediumtext NULL,
+  created_by varchar(190) NOT NULL DEFAULT '',
+  created_at timestamp NOT NULL DEFAULT current_timestamp(),
+  updated_at timestamp NULL DEFAULT NULL ON UPDATE current_timestamp(),
+  PRIMARY KEY (id),
+  KEY created_at (created_at),
+  KEY category (category),
+  KEY priority (priority)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

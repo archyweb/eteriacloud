@@ -59,6 +59,7 @@ class AppActions extends ExtraActions{
 			set_message("success","Notifica inviata.");
 		else:
 			$result=$this->broadcast_notice_payload($payload,$category,$recipients_mode,isset($_POST['customers'])? $_POST['customers'] : []);
+			$this->log_notice_broadcast($payload,$category,$priority,$title,$recipients_mode,$result);
 			if($result['target']==0):
 				set_message("warning","Nessun cliente destinatario selezionato o disponibile.");
 			elseif($result['failed']>0 || $result['email_failed']>0):
@@ -88,7 +89,7 @@ class AppActions extends ExtraActions{
 		$customers=$this->load_notice_customers();
 		$selected_customers=array_map('strval', is_array($selected_customers)? $selected_customers : []);
 		$selected_lookup=array_fill_keys($selected_customers,true);
-		$result=['success'=>0,'failed'=>0,'target'=>0,'email_target'=>0,'email_success'=>0,'email_failed'=>0];
+		$result=['success'=>0,'failed'=>0,'target'=>0,'email_target'=>0,'email_success'=>0,'email_failed'=>0,'customers'=>[],'failed_customers'=>[]];
 		
 		foreach($customers as $customer):
 			if($mode=='selected' && !isset($selected_lookup[$customer['customer']])):
@@ -105,8 +106,10 @@ class AppActions extends ExtraActions{
 				$result['email_success']+=$email_result['success'];
 				$result['email_failed']+=$email_result['failed'];
 				$result['success']++;
+				$result['customers'][]=$this->notice_customer_summary($customer,$email_result);
 			}catch(Throwable $e){
 				$result['failed']++;
+				$result['failed_customers'][]=$this->notice_customer_summary($customer,['target'=>0,'success'=>0,'failed'=>0],$e->getMessage());
 				error_log('[NoticeBroadcast] customer='.$customer['customer'].' db='.($customer['db_name'] ?? '-').' error='.$e->getMessage());
 			}
 			if($mysqli instanceof mysqli):
@@ -115,6 +118,83 @@ class AppActions extends ExtraActions{
 		endforeach;
 		
 		return $result;
+	}
+
+	private function notice_customer_summary($customer,$email_result,$error=''){
+		return [
+			'customer'=>isset($customer['customer'])? $customer['customer'] : '',
+			'subdomain'=>isset($customer['subdomain'])? $customer['subdomain'] : '',
+			'db_name'=>isset($customer['db_name'])? $customer['db_name'] : '',
+			'email_target'=>isset($email_result['target'])? (int)$email_result['target'] : 0,
+			'email_success'=>isset($email_result['success'])? (int)$email_result['success'] : 0,
+			'email_failed'=>isset($email_result['failed'])? (int)$email_result['failed'] : 0,
+			'error'=>$error
+		];
+	}
+
+	private function ensure_notice_broadcast_log_table(){
+		$db=$this->get_db();
+		$sql="
+			create table if not exists archy_notice_broadcasts (
+				id int unsigned not null auto_increment,
+				title varchar(190) not null default '',
+				notice mediumtext null,
+				category varchar(32) not null default 'general',
+				priority varchar(16) not null default 'normal',
+				recipients_mode varchar(32) not null default 'all',
+				target_count int unsigned not null default 0,
+				success_count int unsigned not null default 0,
+				failed_count int unsigned not null default 0,
+				email_target int unsigned not null default 0,
+				email_success int unsigned not null default 0,
+				email_failed int unsigned not null default 0,
+				customers_json mediumtext null,
+				failed_customers_json mediumtext null,
+				created_by varchar(190) not null default '',
+				created_at timestamp not null default current_timestamp,
+				updated_at timestamp null default null on update current_timestamp,
+				primary key (id),
+				key created_at (created_at),
+				key category (category),
+				key priority (priority)
+			) engine=InnoDB default charset=utf8mb4
+		";
+		if(!$db->query($sql)):
+			throw new RuntimeException($db->error);
+		endif;
+	}
+
+	private function log_notice_broadcast($payload,$category,$priority,$title,$recipients_mode,$result){
+		$this->ensure_notice_broadcast_log_table();
+		$db=$this->get_db();
+		$notice_text=isset($payload['notice'])? $payload['notice'] : '';
+		if(trim((string)$title)==''):
+			$parts=$this->notice_mail_parts($payload);
+			$title=$parts['title']!=''? $parts['title'] : 'Notifica';
+		endif;
+		$customers_json=json_encode($result['customers'],JSON_UNESCAPED_UNICODE);
+		$failed_customers_json=json_encode($result['failed_customers'],JSON_UNESCAPED_UNICODE);
+		$user=isset($this->user_full_name)? $this->user_full_name : '';
+		$sql="
+			insert into archy_notice_broadcasts set
+			title='".$db->real_escape_string($title)."',
+			notice='".$db->real_escape_string($notice_text)."',
+			category='".$db->real_escape_string($category)."',
+			priority='".$db->real_escape_string($priority)."',
+			recipients_mode='".$db->real_escape_string($recipients_mode)."',
+			target_count=".(int)$result['target'].",
+			success_count=".(int)$result['success'].",
+			failed_count=".(int)$result['failed'].",
+			email_target=".(int)$result['email_target'].",
+			email_success=".(int)$result['email_success'].",
+			email_failed=".(int)$result['email_failed'].",
+			customers_json='".$db->real_escape_string($customers_json)."',
+			failed_customers_json='".$db->real_escape_string($failed_customers_json)."',
+			created_by='".$db->real_escape_string($user)."'
+		";
+		if(!$db->query($sql)):
+			throw new RuntimeException($db->error);
+		endif;
 	}
 	
 	private function load_notice_customers(){

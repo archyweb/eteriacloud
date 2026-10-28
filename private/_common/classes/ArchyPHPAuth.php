@@ -6,6 +6,154 @@ use ZxcvbnPhp\Zxcvbn;
 
 class ArchyAuth extends Auth
 {
+    private $securityOptions = [];
+
+    public function configureSecurity(array $options): void
+    {
+        $this->securityOptions = $options;
+    }
+
+    public function securityPreferences(int $uid): array
+    {
+        $query = $this->dbh->prepare('SELECT email_otp, totp_otp, phone FROM archy_user_security WHERE uid = ?');
+        $query->execute([$uid]);
+        $saved = $query->fetch(\PDO::FETCH_ASSOC);
+        return $saved ?: ['email_otp' => !empty($this->securityOptions['login_email_otp']),
+            'totp_otp' => !empty($this->securityOptions['login_google_authenticator_otp']), 'phone' => ''];
+    }
+
+    public function securityMethods(int $uid): array
+    {
+        $preferences = $this->securityPreferences($uid);
+        $email = !empty($preferences['email_otp']);
+        $google = !empty($preferences['totp_otp']);
+        if (!$email && !$google && !empty($this->securityOptions['login_otp_required'])) {
+            $email = true;
+            $google = true;
+        }
+        return ['email' => $email, 'google' => $google];
+    }
+
+    private function verifySecurityOwner(string $password, string $code): int
+    {
+        $user = $this->getCurrentUser();
+        if (!$user || empty($user['uid'])) {
+            throw new \RuntimeException('Sessione non valida.');
+        }
+        if ($password !== '') {
+            $check = $this->verifyLoginCredentials($user['email'], $password, 0, '', true);
+            if (!empty($check['error'])) {
+                throw new \RuntimeException($check['message']);
+            }
+        }
+        $uid = (int) $user['uid'];
+        $account = $this->getBaseUser($uid);
+        if (!$account || empty($account['isactive'])) {
+            throw new \RuntimeException('Account non attivo.');
+        }
+        $row = $this->getTotpRow($uid);
+        if ($row && !empty($row['enabled'])) {
+            $counter = null;
+            if ((!empty($row['locked_until']) && strtotime($row['locked_until']) > time()) ||
+                !$this->verifyTotpCode($row['secret'], $code, $counter) ||
+                ($row['last_used_counter'] !== null && $counter <= (int) $row['last_used_counter'])) {
+                $this->registerTotpFailure($uid, (int) $row['failed_attempts']);
+                throw new \RuntimeException('Codice Authenticator non valido, gia usato o temporaneamente bloccato.');
+            }
+            $this->registerTotpSuccess($uid, $counter);
+        }
+        return $uid;
+    }
+
+    public function saveSecurityPreferences(string $password, string $code, bool $email, bool $google, string $phone): void
+    {
+        $uid = $this->verifySecurityOwner($password, $code);
+        $phone = preg_replace('/[\s().-]+/', '', trim($phone));
+        if ($phone !== '' && !preg_match('/^\+[1-9][0-9]{7,14}$/D', $phone)) {
+            throw new \RuntimeException('Inserisci il telefono con prefisso internazionale, ad esempio +393331234567.');
+        }
+        if (!$email && !$google && !empty($this->securityOptions['login_otp_required'])) {
+            throw new \RuntimeException('La doppia autenticazione e obbligatoria: attiva almeno un metodo.');
+        }
+        $row = $this->getTotpRow($uid);
+        if ($google && (!$row || empty($row['enabled']))) {
+            throw new \RuntimeException('Collega e conferma Google Authenticator prima di attivarlo.');
+        }
+        $this->dbh->prepare('INSERT INTO archy_user_security (uid, email_otp, totp_otp, phone, updated_at) VALUES (?, ?, ?, ?, NOW()) ON DUPLICATE KEY UPDATE email_otp = VALUES(email_otp), totp_otp = VALUES(totp_otp), phone = VALUES(phone), updated_at = NOW()')
+            ->execute([$uid, (int) $email, (int) $google, $phone]);
+        unset($_SESSION['archy_login_otp_choices']);
+    }
+
+    public function accountTotpStatus(): array
+    {
+        $user = $this->getCurrentUser();
+        if (!$user || empty($user['uid'])) {
+            throw new \RuntimeException('Sessione non valida.');
+        }
+        return ['enabled' => !empty(($this->getTotpRow((int) $user['uid']) ?: [])['enabled'])];
+    }
+
+    public function beginAccountTotp(string $password, string $code): array
+    {
+        $uid = $this->verifySecurityOwner($password, $code);
+        if (!empty(($this->getTotpRow($uid) ?: [])['enabled'])) {
+            throw new \RuntimeException('Google Authenticator e gia collegato.');
+        }
+        $secret = $this->generateTotpSecret();
+        $this->savePendingTotpSecret($uid, $secret);
+        $_SESSION['archy_security_setup'] = ['uid' => $uid, 'expires' => time() + 600, 'secret' => $secret];
+        return ['secret' => $secret, 'qr' => $this->createTotpQrDataUri($this->getCurrentUser()['email'], $secret)];
+    }
+
+    public function unlinkAccountTotp(string $password, string $code): void
+    {
+        $uid = $this->verifySecurityOwner($password, $code);
+        $preferences = $this->securityPreferences($uid);
+        $email = !empty($preferences['email_otp']);
+        if (!$email && !empty($this->securityOptions['login_otp_required'])) {
+            throw new \RuntimeException('Attiva prima il codice email: la doppia autenticazione e obbligatoria.');
+        }
+        $this->dbh->beginTransaction();
+        try {
+            $this->dbh->prepare('INSERT INTO archy_user_security (uid, email_otp, totp_otp, phone, updated_at) VALUES (?, ?, 0, ?, NOW()) ON DUPLICATE KEY UPDATE totp_otp = 0, updated_at = NOW()')
+                ->execute([$uid, (int) $preferences['email_otp'], $preferences['phone']]);
+            $this->dbh->prepare('DELETE FROM archy_user_totp WHERE uid = ?')->execute([$uid]);
+            $this->dbh->commit();
+        } catch (\Throwable $error) {
+            $this->dbh->rollBack();
+            throw $error;
+        }
+        unset($_SESSION['archy_security_setup'], $_SESSION['archy_login_otp_choices']);
+    }
+
+    public function confirmAccountTotp(string $code): void
+    {
+        $user = $this->getCurrentUser();
+        $setup = $_SESSION['archy_security_setup'] ?? [];
+        if (!$user ||
+            ($setup['uid'] ?? 0) !== (int) $user['uid'] || ($setup['expires'] ?? 0) < time()) {
+            throw new \RuntimeException('Configurazione scaduta. Ripeti il collegamento.');
+        }
+        $row = $this->getTotpRow((int) $user['uid']);
+        $counter = null;
+        if (!$row || !empty($row['enabled']) || !hash_equals((string) $row['pending_secret'], $setup['secret']) ||
+            (!empty($row['locked_until']) && strtotime($row['locked_until']) > time()) ||
+            !$this->verifyTotpCode($setup['secret'], $code, $counter)) {
+            if ($row) {
+                $this->registerTotpFailure((int) $user['uid'], (int) $row['failed_attempts']);
+            }
+            throw new \RuntimeException('Codice non valido o temporaneamente bloccato.');
+        }
+        $this->confirmPendingTotpSecret((int) $user['uid'], $setup['secret'], $counter);
+        $preferences = $this->securityPreferences((int) $user['uid']);
+        if (isset($setup['preferences'])) {
+            $preferences = $setup['preferences'];
+        }
+        $this->dbh->prepare('INSERT INTO archy_user_security (uid, email_otp, totp_otp, phone, updated_at) VALUES (?, ?, 1, ?, NOW()) ON DUPLICATE KEY UPDATE email_otp = VALUES(email_otp), totp_otp = 1, phone = VALUES(phone), updated_at = NOW()')
+            ->execute([(int) $user['uid'], (int) $preferences['email_otp'], $preferences['phone']]);
+        unset($_SESSION['archy_security_setup'], $_SESSION['archy_login_otp_choices']);
+    }
+
     public function __construct($dbh, Config $config) {
         parent::__construct($dbh, $config);
     }
@@ -17,6 +165,9 @@ class ArchyAuth extends Auth
 
     public function loginWithPasswordPolicy(string $email, string $password, int $remember = 0, string $captcha_response = ''): array
     {
+        if ($this->securityOptions !== []) {
+            return $this->prepareOtpLoginChoice($email, $password, $remember, $captcha_response);
+        }
         $email = trim($email);
         $loginCheck = $this->verifyLoginCredentials($email, $password, $remember, $captcha_response);
 
@@ -78,9 +229,222 @@ class ArchyAuth extends Auth
             ];
         }
 
+        return $this->createEmailOtpLogin((int) $loginCheck['user']['uid'], $accountEmail, $remember);
+    }
+
+    public function prepareOtpLoginChoice(string $email, string $password, int $remember = 0, string $captcha_response = ''): array
+    {
+        $email = trim($email);
+        $loginCheck = $this->verifyLoginCredentials($email, $password, $remember, $captcha_response, true);
+
+        if (!empty($loginCheck['error'])) {
+            return $loginCheck;
+        }
+
+        $accountEmail = $loginCheck['user']['email'] ?? $email;
+        $passwordPolicy = $this->validateStrictPassword($password, $accountEmail);
+
+        if (!$passwordPolicy['valid']) {
+            return [
+                'error' => true,
+                'force_password_change_required' => true,
+                'message' => 'La password attuale non rispetta i nuovi requisiti di sicurezza. Imposta una nuova password per accedere.',
+                'email' => $accountEmail,
+                'rules' => $passwordPolicy['rules']
+            ];
+        }
+
+        $methods = $this->securityMethods((int) $loginCheck['user']['uid']);
+        if (!$methods['email'] && !$methods['google']) {
+            $sessiondata = $this->addSession((int) $loginCheck['user']['uid'], (bool) $remember);
+            return ['error' => !$sessiondata, 'authenticated' => (bool) $sessiondata,
+                'message' => $sessiondata ? $this->__lang('logged_in') : $this->__lang('system.error')];
+        }
+        $selector = bin2hex(random_bytes(32));
+        $selectorHash = hash('sha256', $selector);
+
+        if (session_status() !== PHP_SESSION_ACTIVE) {
+            session_start();
+        }
+
+        if (empty($_SESSION['archy_login_otp_choices']) || !is_array($_SESSION['archy_login_otp_choices'])) {
+            $_SESSION['archy_login_otp_choices'] = [];
+        }
+
+        foreach ($_SESSION['archy_login_otp_choices'] as $hash => $choice) {
+            if (empty($choice['expires']) || (int) $choice['expires'] < time()) {
+                unset($_SESSION['archy_login_otp_choices'][$hash]);
+            }
+        }
+
+        $_SESSION['archy_login_otp_choices'][$selectorHash] = [
+            'uid' => (int) $loginCheck['user']['uid'],
+            'email' => $accountEmail,
+            'remember' => (int) $remember,
+            'expires' => time() + 600,
+            'ip' => self::getIp()
+        ];
+
+        return [
+            'error' => false,
+            'message' => 'Scegli come ricevere il codice di accesso.',
+            'otp_choice_token' => $selector,
+            'methods' => $methods,
+            'email' => $accountEmail
+        ];
+    }
+
+    public function startEmailOtpLoginFromChoice(string $selector): array
+    {
+        $choice = $this->consumeOtpLoginChoice($selector, false);
+
+        if (!$choice) {
+            return [
+                'error' => true,
+                'message' => 'Sessione di verifica scaduta. Effettua nuovamente il login.'
+            ];
+        }
+
+        if (!$this->securityMethods((int) $choice['uid'])['email']) {
+            return ['error' => true, 'message' => 'Metodo email non attivo per questo utente.'];
+        }
+
+        $login = $this->createEmailOtpLogin((int) $choice['uid'], (string) $choice['email'], (int) $choice['remember']);
+
+        if (empty($login['error'])) {
+            $this->consumeOtpLoginChoice($selector);
+        }
+
+        return $login;
+    }
+
+    public function startTotpLoginFromChoice(string $selector): array
+    {
+        $choice = $this->consumeOtpLoginChoice($selector, false);
+
+        if (!$choice) {
+            return [
+                'error' => true,
+                'message' => 'Sessione di verifica scaduta. Effettua nuovamente il login.'
+            ];
+        }
+
+        $uid = (int) $choice['uid'];
+        $email = (string) $choice['email'];
+        if (!$this->securityMethods($uid)['google']) {
+            return ['error' => true, 'message' => 'Google Authenticator non attivo per questo utente.'];
+        }
+        $row = $this->getTotpRow($uid);
+
+        if ($row && !empty($row['enabled']) && !empty($row['secret'])) {
+            return [
+                'error' => false,
+                'message' => 'Inserisci il codice generato da Google Authenticator.',
+                'email' => $email,
+                'totp_token' => $selector,
+                'totp_setup_required' => false
+            ];
+        }
+
+        $secret = $row['pending_secret'] ?? '';
+
+        if ($secret === '') {
+            $secret = $this->generateTotpSecret();
+            $this->savePendingTotpSecret($uid, $secret);
+        }
+
+        return [
+            'error' => false,
+            'message' => 'Scansiona il QR code con Google Authenticator e inserisci il codice generato.',
+            'email' => $email,
+            'totp_token' => $selector,
+            'totp_setup_required' => true,
+            'totp_secret' => $secret,
+            'totp_qr_data_uri' => $this->createTotpQrDataUri($email, $secret)
+        ];
+    }
+
+    public function completeTotpLogin(string $selector, string $otp): array
+    {
+        $return = [
+            'error' => true,
+            'message' => 'Codice non valido o scaduto.'
+        ];
+
+        $choice = $this->consumeOtpLoginChoice($selector, false);
+        $otp = preg_replace('/\D+/', '', $otp);
+
+        if (!$choice || strlen($otp) !== 6) {
+            $this->addAttempt();
+            return $return;
+        }
+
+        $uid = (int) $choice['uid'];
+        if (!$this->securityMethods($uid)['google']) {
+            return $return;
+        }
+        $row = $this->getTotpRow($uid);
+
+        if (!$row) {
+            $this->addAttempt();
+            $return['message'] = 'Google Authenticator non configurato per questo utente.';
+            return $return;
+        }
+
+        if (!empty($row['locked_until']) && strtotime($row['locked_until']) > time()) {
+            $this->addAttempt();
+            $return['message'] = 'Troppi tentativi non validi. Riprova piu tardi.';
+            return $return;
+        }
+
+        $setupRequired = empty($row['enabled']);
+        $secret = $setupRequired ? ($row['pending_secret'] ?? '') : ($row['secret'] ?? '');
+
+        if ($secret === '') {
+            $this->addAttempt();
+            $return['message'] = 'Google Authenticator non configurato per questo utente.';
+            return $return;
+        }
+
+        $counter = null;
+        $valid = $this->verifyTotpCode($secret, $otp, $counter);
+
+        if (!$valid || (!$setupRequired && $counter !== null && $row['last_used_counter'] !== null && $counter <= (int) $row['last_used_counter'])) {
+            $this->registerTotpFailure($uid, (int) ($row['failed_attempts'] ?? 0));
+            $this->addAttempt();
+            return $return;
+        }
+
+        if ($setupRequired) {
+            $this->confirmPendingTotpSecret($uid, $secret, $counter);
+        } else {
+            $this->registerTotpSuccess($uid, $counter);
+        }
+
+        $sessiondata = $this->addSession($uid, (bool) $choice['remember']);
+
+        if (!$sessiondata) {
+            $return['message'] = $this->__lang('system.error') . ' #01';
+            return $return;
+        }
+
+        $this->consumeOtpLoginChoice($selector);
+
+        return [
+            'error' => false,
+            'message' => $this->__lang('logged_in'),
+            'hash' => $sessiondata['hash'],
+            'expire' => $sessiondata['expire'],
+            'cookie_name' => $this->config->cookie_name
+        ];
+    }
+
+    private function createEmailOtpLogin(int $uid, string $accountEmail, int $remember = 0): array
+    {
         $mailer = $this->config->mailerDriver;
 
         if (!is_object($mailer) || (method_exists($mailer, 'isConfigured') && !$mailer->isConfigured())) {
+            $return['error'] = true;
             $return['message'] = 'Configurazione SMTP incompleta. Impossibile inviare il codice di accesso.';
             return $return;
         }
@@ -96,7 +460,7 @@ class ArchyAuth extends Auth
             SET consumed_at = NOW()
             WHERE uid = ?
             AND consumed_at IS NULL
-        ")->execute([(int) $loginCheck['user']['uid']]);
+        ")->execute([$uid]);
 
         $query = $this->dbh->prepare("
             INSERT INTO archy_login_otps
@@ -106,7 +470,7 @@ class ArchyAuth extends Auth
         ");
 
         $query->execute([
-            (int) $loginCheck['user']['uid'],
+            $uid,
             $accountEmail,
             $selectorHash,
             password_hash($code, PASSWORD_DEFAULT),
@@ -118,6 +482,7 @@ class ArchyAuth extends Auth
 
         if (!$this->sendLoginOtpEmail($accountEmail, $code)) {
             $this->dbh->prepare("UPDATE archy_login_otps SET consumed_at = NOW() WHERE selector_hash = ?")->execute([$selectorHash]);
+            $return['error'] = true;
             $return['message'] = 'Impossibile inviare il codice di accesso. Riprova piu tardi.';
             return $return;
         }
@@ -128,6 +493,263 @@ class ArchyAuth extends Auth
             'otp_token' => $selector,
             'email' => $accountEmail
         ];
+    }
+
+    private function consumeOtpLoginChoice(string $selector, bool $consume = true): ?array
+    {
+        $selector = trim($selector);
+
+        if ($selector === '') {
+            return null;
+        }
+
+        if (session_status() !== PHP_SESSION_ACTIVE) {
+            session_start();
+        }
+
+        $selectorHash = hash('sha256', $selector);
+        $choice = $_SESSION['archy_login_otp_choices'][$selectorHash] ?? null;
+
+        if (!is_array($choice)) {
+            return null;
+        }
+
+        if (empty($choice['expires']) || (int) $choice['expires'] < time()) {
+            unset($_SESSION['archy_login_otp_choices'][$selectorHash]);
+            return null;
+        }
+
+        if (!empty($choice['ip']) && $choice['ip'] !== self::getIp()) {
+            unset($_SESSION['archy_login_otp_choices'][$selectorHash]);
+            return null;
+        }
+
+        if ($consume) {
+            unset($_SESSION['archy_login_otp_choices'][$selectorHash]);
+        }
+
+        return $choice;
+    }
+
+    private function getTotpRow(int $uid): ?array
+    {
+        $query = $this->dbh->prepare("
+            SELECT uid, secret, pending_secret, enabled, last_used_counter, failed_attempts, locked_until
+            FROM archy_user_totp
+            WHERE uid = ?
+            LIMIT 1
+        ");
+        $query->execute([$uid]);
+        $row = $query->fetch(\PDO::FETCH_ASSOC);
+
+        return $row ?: null;
+    }
+
+    private function savePendingTotpSecret(int $uid, string $secret): void
+    {
+        $query = $this->dbh->prepare("
+            INSERT INTO archy_user_totp
+                (uid, pending_secret, enabled, failed_attempts, locked_until, created_at, updated_at)
+            VALUES
+                (?, ?, 0, 0, NULL, NOW(), NOW())
+            ON DUPLICATE KEY UPDATE
+                pending_secret = VALUES(pending_secret),
+                failed_attempts = 0,
+                locked_until = NULL,
+                updated_at = NOW()
+        ");
+        $query->execute([$uid, $secret]);
+    }
+
+    private function confirmPendingTotpSecret(int $uid, string $secret, ?int $counter): void
+    {
+        $query = $this->dbh->prepare("
+            UPDATE archy_user_totp
+            SET secret = ?,
+                pending_secret = NULL,
+                enabled = 1,
+                confirmed_at = NOW(),
+                last_used_counter = ?,
+                failed_attempts = 0,
+                locked_until = NULL,
+                updated_at = NOW()
+            WHERE uid = ?
+        ");
+        $query->execute([$secret, $counter, $uid]);
+    }
+
+    private function registerTotpSuccess(int $uid, ?int $counter): void
+    {
+        $query = $this->dbh->prepare("
+            UPDATE archy_user_totp
+            SET last_used_counter = ?,
+                failed_attempts = 0,
+                locked_until = NULL,
+                updated_at = NOW()
+            WHERE uid = ?
+        ");
+        $query->execute([$counter, $uid]);
+    }
+
+    private function registerTotpFailure(int $uid, int $failedAttempts): void
+    {
+        $nextAttempts = min(5, $failedAttempts + 1);
+        $lockedUntil = $nextAttempts >= 5 ? date('Y-m-d H:i:s', time() + 600) : null;
+
+        $query = $this->dbh->prepare("
+            UPDATE archy_user_totp
+            SET failed_attempts = ?,
+                locked_until = ?,
+                updated_at = NOW()
+            WHERE uid = ?
+        ");
+        $query->execute([$nextAttempts, $lockedUntil, $uid]);
+    }
+
+    private function generateTotpSecret(): string
+    {
+        return $this->base32Encode(random_bytes(20));
+    }
+
+    private function createTotpQrDataUri(string $email, string $secret): string
+    {
+        $qrLibrary = __DIR__ . '/../libs/phpqrcode/phpqrcode.php';
+        $oldReporting = error_reporting();
+        error_reporting($oldReporting & ~E_DEPRECATED & ~E_USER_DEPRECATED);
+
+        try {
+            if (!class_exists('\\QRcode', false) && is_readable($qrLibrary)) {
+                require_once $qrLibrary;
+            }
+
+            if (!class_exists('\\QRcode', false)) {
+                return '';
+            }
+
+            $uri = $this->buildTotpUri($email, $secret);
+            $level = defined('QR_ECLEVEL_M') ? constant('QR_ECLEVEL_M') : 1;
+            $tempFile = tempnam(sys_get_temp_dir(), 'archy_totp_qr_');
+
+            if ($tempFile === false) {
+                return '';
+            }
+
+            \QRcode::png($uri, $tempFile, $level, 5, 2);
+            $png = file_get_contents($tempFile);
+            @unlink($tempFile);
+
+            return $png === false ? '' : 'data:image/png;base64,' . base64_encode($png);
+        } finally {
+            error_reporting($oldReporting);
+        }
+    }
+
+    private function buildTotpUri(string $email, string $secret): string
+    {
+        $issuer = trim((string) ($this->config->site_name ?: 'Archy Art'));
+        $label = rawurlencode($issuer . ':' . $email);
+        $query = http_build_query([
+            'secret' => $secret,
+            'issuer' => $issuer,
+            'algorithm' => 'SHA1',
+            'digits' => 6,
+            'period' => 30
+        ], '', '&', PHP_QUERY_RFC3986);
+
+        return 'otpauth://totp/' . $label . '?' . $query;
+    }
+
+    private function verifyTotpCode(string $secret, string $otp, ?int &$matchedCounter = null, int $window = 1): bool
+    {
+        $otp = preg_replace('/\D+/', '', $otp);
+
+        if (strlen($otp) !== 6) {
+            return false;
+        }
+
+        $timeCounter = (int) floor(time() / 30);
+
+        for ($offset = -$window; $offset <= $window; $offset++) {
+            $counter = $timeCounter + $offset;
+
+            if ($counter < 0) {
+                continue;
+            }
+
+            if (hash_equals($this->hotp($secret, $counter), $otp)) {
+                $matchedCounter = $counter;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function hotp(string $secret, int $counter): string
+    {
+        $key = $this->base32Decode($secret);
+        $high = (int) floor($counter / 4294967296);
+        $low = $counter & 0xFFFFFFFF;
+        $binaryCounter = pack('N2', $high, $low);
+        $hash = hash_hmac('sha1', $binaryCounter, $key, true);
+        $offset = ord(substr($hash, -1)) & 0x0F;
+        $part = substr($hash, $offset, 4);
+        $value = unpack('N', $part)[1] & 0x7FFFFFFF;
+
+        return str_pad((string) ($value % 1000000), 6, '0', STR_PAD_LEFT);
+    }
+
+    private function base32Encode(string $data): string
+    {
+        $alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+        $buffer = 0;
+        $bitsLeft = 0;
+        $encoded = '';
+
+        for ($i = 0; $i < strlen($data); $i++) {
+            $buffer = ($buffer << 8) | ord($data[$i]);
+            $bitsLeft += 8;
+
+            while ($bitsLeft >= 5) {
+                $bitsLeft -= 5;
+                $encoded .= $alphabet[($buffer >> $bitsLeft) & 31];
+                $buffer &= (1 << $bitsLeft) - 1;
+            }
+        }
+
+        if ($bitsLeft > 0) {
+            $encoded .= $alphabet[($buffer << (5 - $bitsLeft)) & 31];
+        }
+
+        return $encoded;
+    }
+
+    private function base32Decode(string $secret): string
+    {
+        $alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+        $secret = strtoupper(preg_replace('/[^A-Z2-7]/i', '', $secret));
+        $buffer = 0;
+        $bitsLeft = 0;
+        $decoded = '';
+
+        for ($i = 0; $i < strlen($secret); $i++) {
+            $value = strpos($alphabet, $secret[$i]);
+
+            if ($value === false) {
+                continue;
+            }
+
+            $buffer = ($buffer << 5) | $value;
+            $bitsLeft += 5;
+
+            if ($bitsLeft >= 8) {
+                $bitsLeft -= 8;
+                $decoded .= chr(($buffer >> $bitsLeft) & 255);
+                $buffer &= (1 << $bitsLeft) - 1;
+            }
+        }
+
+        return $decoded;
     }
 
     public function completeEmailOtpLogin(string $selector, string $otp): array
@@ -171,6 +793,9 @@ class ArchyAuth extends Auth
             return $return;
         }
 
+        if (!$this->securityMethods((int) $otpRow['uid'])['email']) {
+            return $return;
+        }
         $sessiondata = $this->addSession((int) $otpRow['uid'], (bool) $otpRow['remember']);
 
         if (!$sessiondata) {
