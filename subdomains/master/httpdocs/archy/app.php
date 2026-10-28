@@ -9,6 +9,10 @@ ini_set('display_errors', 1);
 ini_set('display_startup_errors', 1);
 error_reporting(E_ALL);
 $app = new App($subdomain_root);
+if (($_GET['view'] ?? '') === 'security') {
+    header('Cache-Control: no-store, private');
+    header('Referrer-Policy: same-origin');
+}
 
 if (!$app->isLogged()) {
     echo "<script>top.window.location = '/archy/login.php'</script>";

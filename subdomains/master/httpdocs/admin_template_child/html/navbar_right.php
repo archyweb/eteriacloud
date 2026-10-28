@@ -61,7 +61,7 @@
           <a class="dropdown-item fw-bold text-warning" href="#!"><span class="fas fa-crown me-1"></span><span><?php echo htmlspecialchars($app->user_full_name, ENT_QUOTES, 'UTF-8'); ?></span></a>
 
           <div class="dropdown-divider"></div>
-          <a href="archy/app.php?view=password" data-id="archy_password" class="dropdown-item eteria-target">Cambio password</a>
+          <a href="archy/app.php?view=security" data-id="archy_security" class="dropdown-item eteria-target"><span class="fas fa-shield-alt me-1"></span>Sicurezza</a>
           
           <div class="dropdown-divider"></div>
           
@@ -70,3 +70,12 @@
       </div>
     </li>
   </ul>
+<script>
+document.addEventListener('click', function (event) {
+    var link = event.target.closest('.navbar-nav-icons .dropdown-menu a[href]');
+    if (!link || !window.bootstrap || !window.bootstrap.Dropdown) return;
+    document.querySelectorAll('.navbar-nav-icons [data-bs-toggle="dropdown"].show').forEach(function (toggle) {
+        window.bootstrap.Dropdown.getOrCreateInstance(toggle).hide();
+    });
+}, true);
+</script>

@@ -112,7 +112,9 @@ foreach (preg_split('/[^A-Za-z0-9]+/', $siteName, -1, PREG_SPLIT_NO_EMPTY) as $t
                                   'forgot_password' => 'Password dimenticata',
                                   'reset_password' => 'Reimposta password',
                                   'force_password_change' => 'Cambio password richiesto',
+                                  'login_otp_choice' => 'Verifica accesso',
                                   'login_otp' => 'Codice di accesso',
+                                  'login_totp' => 'Google Authenticator',
                                   'login' => 'Account Login'
                                 ];
                               ?>
@@ -230,6 +232,36 @@ foreach (preg_split('/[^A-Za-z0-9]+/', $siteName, -1, PREG_SPLIT_NO_EMPTY) as $t
                                 </div>
                               </form>
                             <?php endif; ?>
+                          <?php elseif ($loginMode === 'login_otp_choice'): ?>
+                            <form name="login-otp-choice-form" method="post" id="login-otp-choice-form">
+                              <input type="hidden" name="form_action" value="login_otp_choice">
+                              <input type="hidden" name="otp_choice_token" value="<?php echo htmlspecialchars($login_otp_choice_token ?? '', ENT_QUOTES, 'UTF-8'); ?>">
+                              <input type="hidden" name="otp_choice_email" value="<?php echo htmlspecialchars($login_otp_choice_email ?? '', ENT_QUOTES, 'UTF-8'); ?>">
+                              <div class="mb-3">
+                                <label class="form-label">Metodo di verifica</label>
+                                <?php if (!empty($login_otp_choice_email)): ?>
+                                  <div class="text-600 fs-10 mb-2"><?php echo htmlspecialchars($login_otp_choice_email, ENT_QUOTES, 'UTF-8'); ?></div>
+                                <?php endif; ?>
+                                <div class="d-grid gap-2">
+                                  <?php if (!empty($login_email_otp_enabled)): ?>
+                                    <button class="btn btn-outline-primary text-start" type="submit" name="otp_method" value="email">
+                                      <span class="fas fa-envelope me-2"></span> Codice via email
+                                    </button>
+                                  <?php endif; ?>
+                                  <?php if (!empty($login_google_authenticator_otp_enabled)): ?>
+                                    <button class="btn btn-outline-primary text-start" type="submit" name="otp_method" value="google">
+                                      <span class="fas fa-mobile-alt me-2"></span> Google Authenticator
+                                    </button>
+                                  <?php endif; ?>
+                                </div>
+                                <?php if (!empty($login_otp_choice_message)): ?>
+                                  <div class="<?php echo !empty($login_otp_choice_token) ? 'alert alert-info' : 'error'; ?> mt-2" style="padding:6px;"><?php echo htmlspecialchars($login_otp_choice_message, ENT_QUOTES, 'UTF-8'); ?></div>
+                                <?php endif; ?>
+                              </div>
+                              <div class="text-center">
+                                <a class="fs-10" href="/archy/login.php">Torna al login</a>
+                              </div>
+                            </form>
                           <?php elseif ($loginMode === 'login_otp'): ?>
                             <form name="login-otp-form" method="post" id="login-otp-form">
                               <input type="hidden" name="form_action" value="login_otp">
@@ -243,6 +275,43 @@ foreach (preg_split('/[^A-Za-z0-9]+/', $siteName, -1, PREG_SPLIT_NO_EMPTY) as $t
                                 <button class="btn btn-primary d-block w-100 mt-3" type="submit">Verifica codice</button>
                                 <?php if (!empty($login_otp_message)): ?>
                                   <div class="<?php echo !empty($login_otp_success) ? 'alert alert-success' : 'error'; ?> mt-2" style="padding:6px;"><?php echo htmlspecialchars($login_otp_message, ENT_QUOTES, 'UTF-8'); ?></div>
+                                <?php endif; ?>
+                              </div>
+                              <div class="text-center">
+                                <a class="fs-10" href="/archy/login.php">Torna al login</a>
+                              </div>
+                            </form>
+                          <?php elseif ($loginMode === 'login_totp'): ?>
+                            <form name="login-totp-form" method="post" id="login-totp-form">
+                              <input type="hidden" name="form_action" value="login_totp">
+                              <input type="hidden" name="totp_token" value="<?php echo htmlspecialchars($login_totp_token ?? '', ENT_QUOTES, 'UTF-8'); ?>">
+                              <input type="hidden" name="totp_email" value="<?php echo htmlspecialchars($login_totp_email ?? '', ENT_QUOTES, 'UTF-8'); ?>">
+                              <?php if (!empty($login_totp_setup_required)): ?>
+                                <div class="mb-3">
+                                  <div class="alert alert-info mt-2" style="padding:6px;">
+                                    Collega Google Authenticator scansionando il QR code, poi inserisci il codice a 6 cifre.
+                                  </div>
+                                  <?php if (!empty($login_totp_qr_data_uri)): ?>
+                                    <div class="text-center my-3">
+                                      <img src="<?php echo htmlspecialchars($login_totp_qr_data_uri, ENT_QUOTES, 'UTF-8'); ?>" alt="QR Google Authenticator" style="width:210px;height:210px;">
+                                    </div>
+                                  <?php endif; ?>
+                                  <?php if (!empty($login_totp_secret)): ?>
+                                    <label class="form-label" for="totp-secret">Codice manuale</label>
+                                    <input class="form-control" id="totp-secret" type="text" value="<?php echo htmlspecialchars($login_totp_secret, ENT_QUOTES, 'UTF-8'); ?>" readonly/>
+                                  <?php endif; ?>
+                                </div>
+                              <?php elseif (!empty($login_totp_email)): ?>
+                                <div class="text-600 fs-10 mb-2"><?php echo htmlspecialchars($login_totp_email, ENT_QUOTES, 'UTF-8'); ?></div>
+                              <?php endif; ?>
+                              <div class="mb-3">
+                                <label class="form-label" for="totp-code">Codice Google Authenticator</label>
+                                <input class="form-control" id="totp-code" name="totp_code" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required autofocus/>
+                              </div>
+                              <div class="mb-3">
+                                <button class="btn btn-primary d-block w-100 mt-3" type="submit">Verifica codice</button>
+                                <?php if (!empty($login_totp_message)): ?>
+                                  <div class="error mt-2" style="padding:6px;"><?php echo htmlspecialchars($login_totp_message, ENT_QUOTES, 'UTF-8'); ?></div>
                                 <?php endif; ?>
                               </div>
                               <div class="text-center">

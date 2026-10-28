@@ -1,10 +1,10 @@
 {
-  "version": "2026.07.19.1",
-  "requires": "2026.07.13.1",
+  "version": "2026.10.26.1",
+  "requires": "2026.08.14.1",
   "package": "",
   "sha256": "",
-  "sql": "sql/archyart-update-2026.07.19.1.sql",
-  "sql_sha256": "5fe369384e98a4e54f3c2badedd527b8b40ae18d6a37dfffb1fe47a776eef933",
-  "changelog": "Aggiunge struttura database per collegamento account Google Calendar e sincronizzazione eventi dashboard.",
-  "created_at": "2026-07-19"
+  "sql": "sql/archyart-update-2026.10.26.1.sql",
+  "sql_sha256": "e4f283639dfa14888081beec08be6cd1456f0c716f6d3dbecc8916dab82a86fa",
+  "changelog": "Aggiunge le preferenze personali di sicurezza per OTP email, Google Authenticator e telefono.",
+  "created_at": "2026-10-26"
 }

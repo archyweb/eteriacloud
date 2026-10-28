@@ -39,9 +39,14 @@ endif;
 		<div class="card">
 			<div class="card-header d-flex flex-between-center py-2 border-bottom">
 				<h5 class="mb-0">Invia notifica</h5>
-				<a class="btn btn-falcon-default btn-sm" href="/archy/app.php?intent=archy_notices&view=grid">
-					<span class="fas fa-list me-1"></span> Elenco
-				</a>
+				<div class="btn-group" role="group">
+					<a class="btn btn-falcon-default btn-sm" href="/archy/app.php?view=notice_broadcasts">
+						<span class="fas fa-history me-1"></span> Invii
+					</a>
+					<a class="btn btn-falcon-default btn-sm" href="/archy/app.php?intent=archy_notices&view=grid">
+						<span class="fas fa-list me-1"></span> Elenco
+					</a>
+				</div>
 			</div>
 			<div class="card-body">
 				<form method="post" action="/archy/app.php?do_action=send_notice" class="row g-3 needs-validation" novalidate="">

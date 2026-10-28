@@ -14,12 +14,32 @@ class Calendar{
 	}
 	
 	public function add($event_details){
+		$start = $this->sql($event_details['start'] ?? '');
+		$end = $this->sql($event_details['end'] ?? '');
+		$title = $this->sql($event_details['title'] ?? '');
+		$description = $this->sql($event_details['description'] ?? '');
+		$all_day = $this->sql($event_details['allDay'] ?? '');
+		$class_name = $this->sql($event_details['className'] ?? '');
+
+		if($start === ''){
+			throw new Exception('Data inizio evento mancante.');
+		}
+
+		if($title === ''){
+			throw new Exception('Titolo evento mancante.');
+		}
+
 		$this->db->query("
 			insert into archy_calendar 
 			(calendar_start_date,calendar_end_date,calendar_title,calendar_description,calendar_allday,calendar_class) 
 			values 
-			('".$event_details['start']."','".$event_details['end']."','".addslashes($event_details['title'])."','".addslashes($event_details['description'])."','".$event_details['allDay']."','".$event_details['className']."')
+			('".$start."','".$end."','".$title."','".$description."','".$all_day."','".$class_name."')
 		");
+
+		if($this->db->error){
+			throw new Exception('Errore database calendario: '.$this->db->error);
+		}
+
 		$calendar_id = $this->db->insert_id;
 
 		if(class_exists('GoogleCalendarService')){
@@ -28,6 +48,10 @@ class Calendar{
 		}
 
 		return $calendar_id;
+	}
+
+	protected function sql($value){
+		return $this->db->real_escape_string(trim((string)$value));
 	}
 	
 	/*public function print_month($month){

@@ -12,10 +12,19 @@ if(isset($_GET['do'])){
     if($_GET['do']=='get'){
         echo $calendar->get();
     }elseif($_GET['do']=='add'){
-        //print_r($_POST);
         header('Content-Type: application/json; charset=utf-8');
-        echo json_encode(['id' => $calendar->add($_POST)]);
+        try {
+            echo json_encode([
+                'success' => true,
+                'id' => $calendar->add($_POST)
+            ]);
+        } catch (Exception $e) {
+            http_response_code(500);
+            echo json_encode([
+                'success' => false,
+                'error' => $e->getMessage()
+            ]);
+        }
     }
     
 }
-

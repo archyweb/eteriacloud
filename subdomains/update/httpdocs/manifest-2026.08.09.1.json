@@ -1,0 +1,10 @@
+{
+  "version": "2026.08.09.1",
+  "requires": "2026.08.07.1",
+  "package": "",
+  "sha256": "",
+  "sql": "sql/archyart-update-2026.08.09.1.sql",
+  "sql_sha256": "f0a484e44f84b3734285c79b4c6378d39cc99c2b394085b07cf1b648b5448681",
+  "changelog": "Normalizza la tabella Google Authenticator esistente aggiungendo i campi mancanti.",
+  "created_at": "2026-08-09"
+}
