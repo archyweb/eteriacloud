@@ -20,6 +20,29 @@ class CoreUpdate
     public function run($options = array())
     {
         $options = array_merge($this->options, is_array($options) ? $options : array());
+        $mode = isset($options['mode']) ? strtolower(trim((string) $options['mode'])) : 'db';
+        if (!in_array($mode, array('files', 'all'), true)) {
+            return $this->runUnlocked($options);
+        }
+        $this->ensureDirectory($this->updateRoot . '/runtime');
+        $lock = fopen($this->updateRoot . '/runtime/files.lock', 'c');
+        if (!$lock) {
+            throw new RuntimeException('Impossibile aprire il lock aggiornamenti file.');
+        }
+        try {
+            if (!flock($lock, LOCK_EX | LOCK_NB)) {
+                throw new RuntimeException('Un altro aggiornamento file e gia in corso.');
+            }
+            return $this->runUnlocked($options);
+        } finally {
+            flock($lock, LOCK_UN);
+            fclose($lock);
+        }
+    }
+
+    protected function runUnlocked($options = array())
+    {
+        $options = array_merge($this->options, is_array($options) ? $options : array());
         $dryRun = $this->toBool(isset($options['dry_run']) ? $options['dry_run'] : true);
         $mode = isset($options['mode']) ? strtolower(trim((string) $options['mode'])) : 'db';
         $this->appliedPackageDestinations = array();
@@ -30,6 +53,13 @@ class CoreUpdate
 
         $manifestPath = isset($options['manifest']) ? $options['manifest'] : $this->updateRoot . '/manifest.json';
         $customersPath = isset($options['customers']) ? $options['customers'] : $this->defaultCustomersPath();
+
+        if (!empty($options['sequence']) && $this->toBool($options['sequence'])) {
+            if ($mode !== 'db') {
+                throw new RuntimeException('La sequenza aggiornamenti supporta solo mode=db.');
+            }
+            return $this->runDbSequence($manifestPath, $customersPath, $dryRun);
+        }
 
         $manifest = $this->loadManifest($manifestPath);
         $sql = in_array($mode, array('db', 'all'), true) ? $this->loadSqlFromManifest($manifest, $manifestPath) : null;
@@ -61,12 +91,126 @@ class CoreUpdate
         );
     }
 
+    protected function runDbSequence($catalogPath, $customersPath, $dryRun)
+    {
+        $catalog = json_decode($this->readPathOrUrl($catalogPath), true);
+        if (!is_array($catalog) || empty($catalog['manifests']) || !is_array($catalog['manifests'])) {
+            throw new RuntimeException('Catalogo SQL non valido: manca manifests.');
+        }
+
+        $updates = array();
+        foreach ($catalog['manifests'] as $path) {
+            $path = $this->resolveManifestAssetPath($catalogPath, $path);
+            $manifest = $this->loadManifest($path);
+            $version = $manifest['version'];
+            if (isset($updates[$version])) {
+                throw new RuntimeException('Versione duplicata nel catalogo: ' . $version);
+            }
+            if (empty($manifest['sql_sha256'])) {
+                throw new RuntimeException('Hash SQL mancante per versione ' . $version);
+            }
+            $updates[$version] = array('manifest' => $manifest, 'sql' => $this->loadSqlFromManifest($manifest, $path));
+        }
+
+        $results = array();
+        foreach ($this->loadCustomers($customersPath) as $customer) {
+            if (!$this->toBool($customer['enabled'])) {
+                $results[] = array('customer' => $customer['customer'], 'status' => 'skipped', 'message' => 'Cliente disabilitato.');
+                continue;
+            }
+            $results[] = $this->processDbSequence($customer, $updates, $dryRun);
+        }
+        return array(
+            'status' => $this->hasFailures($results) ? 'partial' : 'success',
+            'dry_run' => $dryRun,
+            'mode' => 'db',
+            'sequence' => true,
+            'versions' => array_keys($updates),
+            'summary' => $this->summary($results),
+            'results' => $results,
+        );
+    }
+
+    protected function installedDbVersions($mysqli)
+    {
+        if (!$this->tableExists($mysqli, 'archy_core_updates')) {
+            return array();
+        }
+        $result = $mysqli->query("SELECT version FROM archy_core_updates WHERE status = 'success' AND dry_run = 0 AND sql_file IS NOT NULL AND sql_file <> ''");
+        if (!$result) {
+            throw new RuntimeException('Impossibile leggere storico aggiornamenti: ' . $mysqli->error);
+        }
+        $versions = array();
+        while ($row = $result->fetch_assoc()) {
+            $versions[$row['version']] = true;
+        }
+        $result->free();
+        return $versions;
+    }
+
+    protected function processDbSequence($customer, $updates, $dryRun)
+    {
+        $mysqli = null;
+        $steps = array();
+        $current = null;
+        try {
+            $mysqli = $this->connectCustomer($customer);
+            $lock = $mysqli->query("SELECT GET_LOCK('archy_core_update_db', 0) AS acquired");
+            if (!$lock || (int) $lock->fetch_assoc()['acquired'] !== 1) {
+                throw new RuntimeException('Un altro aggiornamento DB e gia in corso.');
+            }
+            $installed = $this->installedDbVersions($mysqli);
+            foreach ($updates as $version => $update) {
+                $current = $update['manifest'];
+                if (isset($installed[$version])) {
+                    $steps[] = array('version' => $version, 'status' => 'skipped', 'message' => 'Gia installato.');
+                    continue;
+                }
+                $requires = isset($current['requires']) ? trim($current['requires']) : '';
+                if ($requires !== '' && !isset($installed[$requires])) {
+                    throw new RuntimeException('Versione richiesta non installata o precedente nel catalogo: ' . $requires);
+                }
+                if (!$dryRun) {
+                    $this->executeSql($mysqli, $update['sql']);
+                    $this->recordUpdate($mysqli, $current, 'success', false, 'Aggiornamento DB eseguito.', array('mode' => 'db', 'applied' => array('db'), 'sequence' => true));
+                }
+                // Nel test le dipendenze successive includono gli aggiornamenti pianificati.
+                $installed[$version] = true;
+                $steps[] = array('version' => $version, 'status' => $dryRun ? 'pending' : 'success', 'message' => $dryRun ? 'Da eseguire.' : 'Eseguito.');
+            }
+            $status = 'success';
+        } catch (Throwable $e) {
+            $status = 'failed';
+            $steps[] = array('version' => $current ? $current['version'] : null, 'status' => 'failed', 'message' => $e->getMessage());
+        } finally {
+            if ($mysqli) {
+                $mysqli->close();
+            }
+        }
+        return array('customer' => $customer['customer'], 'database' => $customer['db_name'], 'status' => $status, 'updates' => $steps);
+    }
+
     protected function processCustomer($customer, $manifest, $sql, $package, $dryRun, $mode)
     {
         $mysqli = null;
+        $canRecordFailure = false;
 
         try {
             $mysqli = $this->connectCustomer($customer);
+            if (in_array($mode, array('files', 'all'), true) && !$this->tableExists($mysqli, 'archy_core_updates')) {
+                throw new RuntimeException('Installare prima la tabella archy_core_updates con la procedura DB.');
+            }
+            if ($mode === 'files' && $this->isFileVersionInstalled($mysqli, $manifest)) {
+                $targets = $this->resolveCustomerFileTargets($customer);
+                $plan = $this->readPackageOperations($package, $targets, true);
+                foreach ($plan['operations'] as $operation) {
+                    if (!$operation['unchanged']) {
+                        throw new RuntimeException('Versione file gia registrata ma file modificato o mancante: ' . $operation['destination']);
+                    }
+                }
+                $mysqli->close();
+                return array('customer' => $customer['customer'], 'status' => 'skipped', 'message' => 'Pacchetto gia installato e file verificati.');
+            }
             $this->assertUpdateRequirement($mysqli, $manifest);
             $fileTargets = in_array($mode, array('files', 'all'), true) ? $this->resolveCustomerFileTargets($customer) : null;
 
@@ -89,6 +233,7 @@ class CoreUpdate
             }
 
             $applied = array();
+            $canRecordFailure = true;
             $fileResult = null;
             $backupPath = null;
 
@@ -122,7 +267,7 @@ class CoreUpdate
                 'message' => 'Aggiornamento eseguito correttamente.',
             );
         } catch (Throwable $e) {
-            if ($mysqli instanceof mysqli) {
+            if ($mysqli instanceof mysqli && !$dryRun && $canRecordFailure) {
                 try {
                     $this->recordUpdate($mysqli, $manifest, 'failed', $dryRun, $e->getMessage(), array(
                         'customer' => $customer['customer'],
@@ -140,7 +285,26 @@ class CoreUpdate
                 'status' => 'failed',
                 'message' => $e->getMessage(),
             );
+        } finally {
+            if ($mysqli instanceof mysqli) {
+                try { $mysqli->close(); } catch (Throwable $ignored) {}
+            }
         }
+    }
+
+    protected function isFileVersionInstalled($mysqli, $manifest)
+    {
+        $result = $mysqli->query('SELECT status, dry_run, package_sha256 FROM archy_core_updates WHERE version = ' . $this->sqlValue($mysqli, $manifest['version']));
+        if (!$result) {
+            throw new RuntimeException('Impossibile leggere storico file: ' . $mysqli->error);
+        }
+        $row = $result->fetch_assoc();
+        $result->free();
+        if (!$row) { return false; }
+        if (empty($row['package_sha256']) || !hash_equals(strtolower($row['package_sha256']), strtolower($manifest['sha256']))) {
+            throw new RuntimeException('Versione gia utilizzata con contenuto diverso. Usare una nuova versione per il pacchetto file.');
+        }
+        return $row['status'] === 'success' && !(int) $row['dry_run'];
     }
 
     protected function connectCustomer($customer)
@@ -355,7 +519,10 @@ class CoreUpdate
         $runtimeDir = $this->updateRoot . '/runtime';
         $this->ensureDirectory($runtimeDir);
 
-        $packageFile = $runtimeDir . '/' . basename(parse_url($packagePath, PHP_URL_PATH) ?: $manifest['package']);
+        if (empty($manifest['sha256']) || !preg_match('/^[a-f0-9]{64}$/i', $manifest['sha256'])) {
+            throw new RuntimeException('Hash SHA256 del pacchetto obbligatorio (64 caratteri esadecimali).');
+        }
+        $packageFile = $runtimeDir . '/' . strtolower($manifest['sha256']) . '.zip';
         $this->copyPathOrUrl($packagePath, $packageFile);
 
         if (isset($manifest['sha256']) && trim((string) $manifest['sha256']) !== '') {
@@ -552,7 +719,7 @@ class CoreUpdate
         $subdomainRoot = isset($customer['subdomain_root']) ? trim((string) $customer['subdomain_root']) : '';
 
         if ($subdomainRoot === '' && $subdomainKey !== '') {
-            if (!preg_match('/^[a-zA-Z0-9._-]+$/', $subdomainKey)) {
+            if (!preg_match('/^[a-zA-Z0-9._-]+$/', $subdomainKey) || in_array($subdomainKey, array('.', '..'), true)) {
                 throw new RuntimeException('Codice sottodominio non valido per ' . $customer['customer'] . ': ' . $subdomainKey);
             }
             $subdomainRoot = $mainRootReal . '/subdomains/' . $subdomainKey . '/httpdocs';
@@ -566,6 +733,7 @@ class CoreUpdate
                 throw new RuntimeException('Root sottodominio non valida per aggiornamento files: ' . $subdomainRoot);
             }
             $subdomainRootReal = str_replace('\\', '/', $subdomainRootReal);
+            $this->assertPathWithinRoot($subdomainRootReal, $mainRootReal);
         }
 
         return array(
@@ -587,106 +755,125 @@ class CoreUpdate
     protected function applyPackage($package, $targets, $customer, $manifest)
     {
         $plan = $this->readPackageOperations($package, $targets, false);
-        $version = isset($manifest['version']) ? preg_replace('/[^a-zA-Z0-9._-]+/', '-', (string) $manifest['version']) : 'update';
-        $customerName = isset($customer['customer']) ? preg_replace('/[^a-zA-Z0-9._-]+/', '-', (string) $customer['customer']) : 'customer';
-        $backupPath = $this->updateRoot . '/backups/' . $version . '-' . date('Ymd-His') . '-' . $customerName . '.zip';
-        $backupZip = null;
-        $copied = 0;
-        $skipped = 0;
-        $backedUp = 0;
-        $operations = array();
-
+        $version = preg_replace('/[^a-zA-Z0-9._-]+/', '-', $manifest['version']);
+        $backupPath = $this->updateRoot . '/backups/' . $version . '-' . bin2hex(random_bytes(8)) . '.zip';
         $zip = new ZipArchive();
         if ($zip->open($package['path']) !== true) {
-            throw new RuntimeException('Impossibile aprire pacchetto aggiornamento files.');
+            throw new RuntimeException('Impossibile aprire pacchetto file.');
         }
-
-        foreach ($plan['operations'] as $operation) {
-            $destinationKey = strtolower($operation['destination']);
-            if (isset($this->appliedPackageDestinations[$destinationKey])) {
-                $skipped++;
-                $operations[] = array(
-                    'entry' => $operation['entry'],
-                    'destination' => $operation['destination'],
-                    'action' => 'skipped_duplicate',
+        $staged = array();
+        $changed = array();
+        $originals = array();
+        $skipped = 0;
+        $backup = null;
+        $backupReady = false;
+        try {
+            foreach ($plan['operations'] as $operation) {
+                if ($operation['unchanged']) { $skipped++; continue; }
+                $destination = $operation['destination'];
+                $this->assertPathWithinRoot($destination, $targets['main_root']);
+                $content = $zip->getFromName($operation['entry']);
+                if ($content === false || !hash_equals($operation['sha256'], hash('sha256', $content))) {
+                    throw new RuntimeException('Contenuto ZIP non valido: ' . $operation['entry']);
+                }
+                $old = is_file($destination) ? file_get_contents($destination) : null;
+                if ($old === false) {
+                    throw new RuntimeException('Impossibile leggere originale: ' . $destination);
+                }
+                $originals[$destination] = array(
+                    'content' => $old,
+                    'mode' => $old !== null ? (fileperms($destination) & 0777) : 0644,
                 );
-                continue;
+                $staged[$destination] = $this->stageFile($destination, $content, $originals[$destination]['mode']);
+            }
+            if (!$staged) {
+                return array('copied' => 0, 'unchanged' => $skipped, 'backup_path' => null);
             }
 
-            if (is_file($operation['destination'])) {
-                if ($backupZip === null) {
-                    $this->ensureDirectory(dirname($backupPath));
-                    $backupZip = new ZipArchive();
-                    if ($backupZip->open($backupPath, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
-                        $zip->close();
-                        throw new RuntimeException('Impossibile creare backup aggiornamento files: ' . $backupPath);
+            $this->ensureDirectory(dirname($backupPath));
+            $backup = new ZipArchive();
+            if ($backup->open($backupPath, ZipArchive::CREATE | ZipArchive::EXCL) !== true) {
+                throw new RuntimeException('Impossibile creare backup: ' . $backupPath);
+            }
+            $restore = array();
+            foreach ($originals as $destination => $original) {
+                $relative = substr($destination, strlen(rtrim($targets['main_root'], '/')) + 1);
+                $restore[] = array('path' => $relative, 'existed' => $original['content'] !== null, 'mode' => $original['mode']);
+                if ($original['content'] !== null && !$backup->addFromString('files/' . $relative, $original['content'])) {
+                    throw new RuntimeException('Impossibile salvare originale nel backup: ' . $relative);
+                }
+            }
+            if (!$backup->addFromString('restore.json', json_encode(array('version' => $manifest['version'], 'files' => $restore), JSON_PRETTY_PRINT))) {
+                throw new RuntimeException('Impossibile salvare indice backup.');
+            }
+            // Il backup deve essere persistito prima della prima sostituzione.
+            if (!$backup->close()) {
+                $backup = null;
+                throw new RuntimeException('Impossibile completare backup: ' . $backupPath);
+            }
+            $backup = null;
+            $backupReady = true;
+            foreach ($staged as $destination => $temp) {
+                $this->assertPathWithinRoot($destination, $targets['main_root']);
+                $this->replaceStagedFile($temp, $destination);
+                $changed[] = $destination;
+                unset($staged[$destination]);
+            }
+            return array('copied' => count($changed), 'unchanged' => $skipped, 'backup_path' => $backupPath);
+        } catch (Throwable $e) {
+            $rollbackErrors = array();
+            foreach (array_reverse($changed) as $destination) {
+                try {
+                    $original = $originals[$destination];
+                    if ($original['content'] === null) {
+                        if (!unlink($destination)) { throw new RuntimeException('rimozione fallita'); }
+                    } else {
+                        $temp = $this->stageFile($destination, $original['content'], $original['mode']);
+                        try {
+                            if (!rename($temp, $destination)) { throw new RuntimeException('ripristino fallito'); }
+                        } finally {
+                            if (is_file($temp)) { unlink($temp); }
+                        }
                     }
+                    if (function_exists('opcache_invalidate')) { @opcache_invalidate($destination, true); }
+                } catch (Throwable $restoreError) {
+                    $rollbackErrors[] = $destination . ': ' . $restoreError->getMessage();
                 }
-
-                $backupName = ltrim(str_replace($targets['main_root'], '', $operation['destination']), '/');
-                if ($backupName === '') {
-                    $backupName = basename($operation['destination']);
-                }
-                $backupContent = file_get_contents($operation['destination']);
-                if ($backupContent === false || !$backupZip->addFromString($backupName, $backupContent)) {
-                    $backupZip->close();
-                    $zip->close();
-                    throw new RuntimeException('Impossibile aggiungere file al backup: ' . $operation['destination']);
-                }
-                $backedUp++;
             }
-
-            $stream = $zip->getStream($operation['entry']);
-            if (!$stream) {
-                if ($backupZip) {
-                    $backupZip->close();
-                }
-                $zip->close();
-                throw new RuntimeException('Impossibile leggere file dal pacchetto: ' . $operation['entry']);
-            }
-
-            $this->ensureDirectory(dirname($operation['destination']));
-            $write = fopen($operation['destination'], 'wb');
-            if (!$write) {
-                fclose($stream);
-                if ($backupZip) {
-                    $backupZip->close();
-                }
-                $zip->close();
-                throw new RuntimeException('Impossibile scrivere file aggiornato: ' . $operation['destination']);
-            }
-
-            while (!feof($stream)) {
-                fwrite($write, fread($stream, 1048576));
-            }
-            fclose($write);
-            fclose($stream);
-
-            $this->appliedPackageDestinations[$destinationKey] = true;
-            $copied++;
-            $operations[] = array(
-                'entry' => $operation['entry'],
-                'destination' => $operation['destination'],
-                'action' => 'copied',
-            );
+            throw new RuntimeException($e->getMessage()
+                . ($backupReady ? ' Backup: ' . $backupPath . '.' : '')
+                . ($rollbackErrors ? ' Ripristino incompleto: ' . implode('; ', $rollbackErrors) : ' File sostituiti ripristinati.'), 0, $e);
+        } finally {
+            foreach ($staged as $temp) { if (is_file($temp)) { unlink($temp); } }
+            if ($backup) { $backup->close(); }
+            $zip->close();
         }
+    }
 
-        if ($backupZip) {
-            $backupZip->close();
-        } else {
-            $backupPath = null;
+    protected function stageFile($destination, $content, $mode)
+    {
+        $this->ensureDirectory(dirname($destination));
+        $temp = tempnam(dirname($destination), '.archy-update-');
+        if ($temp === false) { throw new RuntimeException('Impossibile creare file temporaneo: ' . $destination); }
+        try {
+            if (file_put_contents($temp, $content) !== strlen($content)
+                || !hash_equals(hash('sha256', $content), hash_file('sha256', $temp))
+                || !chmod($temp, $mode)) {
+                throw new RuntimeException('Scrittura o verifica fallita: ' . $destination);
+            }
+            return $temp;
+        } catch (Throwable $e) {
+            unlink($temp);
+            throw $e;
         }
+    }
 
-        $zip->close();
-
-        return array(
-            'package_source' => isset($package['source']) ? $package['source'] : null,
-            'backup_path' => $backupPath,
-            'copied' => $copied,
-            'skipped_duplicate' => $skipped,
-            'backed_up' => $backedUp,
-            'operations' => $this->limitOperations($operations),
-        );
+    protected function replaceStagedFile($temp, $destination)
+    {
+        if (!rename($temp, $destination)) {
+            throw new RuntimeException('Sostituzione fallita: ' . $destination);
+        }
+        if (function_exists('opcache_invalidate')) { @opcache_invalidate($destination, true); }
     }
 
     protected function readPackageOperations($package, $targets, $dryRun)
@@ -702,23 +889,62 @@ class CoreUpdate
 
         $operations = array();
         $total = 0;
+        $destinations = array();
+        $bytes = 0;
+        try {
         for ($i = 0; $i < $zip->numFiles; $i++) {
             $entry = $zip->getNameIndex($i);
+            if (!$this->isSafeZipEntry($entry)) {
+                throw new RuntimeException('Percorso ZIP non consentito: ' . $entry);
+            }
+            $stat = $zip->statIndex($i);
+            $zip->getExternalAttributesIndex($i, $opsys, $attributes);
+            if ((($attributes >> 16) & 0170000) === 0120000) {
+                throw new RuntimeException('Link simbolico ZIP non consentito: ' . $entry);
+            }
             if (substr($entry, -1) === '/') {
                 continue;
             }
 
             $destination = $this->resolvePackageEntryDestination($entry, $targets);
+            $key = PHP_OS_FAMILY === 'Windows' ? strtolower($destination) : $destination;
+            if (isset($destinations[$key])) {
+                throw new RuntimeException('Destinazione duplicata nel pacchetto: ' . $entry);
+            }
+            $destinations[$key] = true;
+            $bytes += $stat['size'];
+            if ($bytes > 268435456 || $total >= 5000) {
+                throw new RuntimeException('Pacchetto oltre i limiti: 256 MiB decompressi o 5000 file.');
+            }
+            if (file_exists($destination) && !is_file($destination)) {
+                throw new RuntimeException('La destinazione non e un file: ' . $destination);
+            }
+            $parent = dirname($destination);
+            while (!file_exists($parent)) { $parent = dirname($parent); }
+            if (!is_dir($parent) || !is_writable($parent) || (is_file($destination) && !is_readable($destination))) {
+                throw new RuntimeException('Permessi insufficienti: ' . $destination);
+            }
+            $content = $zip->getFromIndex($i);
+            if ($content === false || strlen($content) !== $stat['size']
+                || strtolower(hash('crc32b', $content)) !== sprintf('%08x', $stat['crc'])) {
+                throw new RuntimeException('File ZIP danneggiato: ' . $entry);
+            }
+            $hash = hash('sha256', $content);
+            $unchanged = is_file($destination) && hash_equals($hash, hash_file('sha256', $destination));
             $total++;
             $operations[] = array(
                 'entry' => $entry,
                 'destination' => $destination,
+                'sha256' => $hash,
+                'unchanged' => $unchanged,
                 'exists' => is_file($destination),
-                'action' => $dryRun ? (is_file($destination) ? 'would_replace' : 'would_create') : 'pending',
+                'action' => $unchanged ? 'unchanged' : ($dryRun ? (is_file($destination) ? 'would_replace' : 'would_create') : 'pending'),
             );
         }
-
+        if (!$total) { throw new RuntimeException('Pacchetto senza file.'); }
+        } finally {
         $zip->close();
+        }
 
         return array(
             'package_source' => isset($package['source']) ? $package['source'] : null,
@@ -731,7 +957,6 @@ class CoreUpdate
     protected function resolvePackageEntryDestination($entry, $targets)
     {
         $entry = str_replace('\\', '/', (string) $entry);
-        $entry = ltrim($entry, '/');
 
         if (!$this->isSafeZipEntry($entry)) {
             throw new RuntimeException('Percorso non consentito nel pacchetto: ' . $entry);
@@ -772,11 +997,13 @@ class CoreUpdate
         $entry = strtolower(str_replace('\\', '/', (string) $entry));
         $basename = basename($entry);
 
-        if (in_array($basename, array('.env', 'config-local.php', 'customers.csv', 'customers.xlsx', 'customers.xls'), true)) {
+        if (strpos($basename, '.env') === 0 || in_array($basename, array('config-local.php', 'customers.csv', 'customers.xlsx', 'customers.xls'), true)
+            || preg_match('~(^|/)(\.git|\.svn|uploads|storage|backups|logs)(/|$)~', $entry)) {
             return true;
         }
 
         $blockedPrefixes = array(
+            'private/_common/config.php',
             'private/_common/update/logs/',
             'private/_common/update/backups/',
             'private/_common/update/runtime/',
@@ -799,10 +1026,22 @@ class CoreUpdate
 
     protected function assertPathWithinRoot($path, $root)
     {
-        $path = strtolower(str_replace('\\', '/', $this->normalizePath($path)));
-        $root = strtolower(rtrim(str_replace('\\', '/', $this->normalizePath($root)), '/'));
+        $probe = str_replace('\\', '/', $path);
+        while ($probe !== dirname($probe)) {
+            if (is_link($probe)) { throw new RuntimeException('Link simbolico nella destinazione: ' . $probe); }
+            $probe = dirname($probe);
+        }
+        $parent = $path;
+        while (!file_exists($parent)) { $parent = dirname($parent); }
+        $resolved = str_replace('\\', '/', realpath($parent));
+        $path = str_replace('\\', '/', $path);
+        $root = rtrim(str_replace('\\', '/', $this->normalizePath($root)), '/');
+        if (PHP_OS_FAMILY === 'Windows') {
+            $path = strtolower($path); $root = strtolower($root); $resolved = strtolower($resolved);
+        }
 
-        if ($path !== $root && strpos($path, $root . '/') !== 0) {
+        if (($path !== $root && strpos($path, $root . '/') !== 0)
+            || ($resolved !== $root && strpos($resolved, $root . '/') !== 0)) {
             throw new RuntimeException('Destinazione fuori dalla root consentita: ' . $path);
         }
     }
@@ -824,7 +1063,12 @@ class CoreUpdate
             return false;
         }
 
-        if (strpos($entry, '../') !== false || preg_match('/(^|\/)\.\.(\/|$)/', $entry)) {
+        foreach (explode('/', rtrim($entry, '/')) as $segment) {
+            if ($segment === '' || preg_match('/[. ]$/', $segment)) { return false; }
+        }
+
+        if (preg_match('~(^|/)\.{1,2}(/|$)~', $entry) || strpos($entry, '//') !== false
+            || preg_match('/[\x00-\x1f:]/', $entry)) {
             return false;
         }
 

@@ -63,20 +63,13 @@ class GoogleCalendarService
         return $protocol . '://' . $host . '/archy/google_calendar_callback.php';
     }
 
-    public function buildState($nonce, array $options = [])
+    public function buildState($nonce)
     {
-        $payload = [
+        return self::encodeState([
             'nonce' => $nonce,
-            'user_id' => $this->user_id,
             'return_uri' => $this->getLocalCallbackUri(),
             'created_at' => time()
-        ];
-
-        if (!empty($options['popup'])) {
-            $payload['popup'] = 1;
-        }
-
-        return self::encodeState($payload, $this->getStateSecret());
+        ], $this->getStateSecret());
     }
 
     public function parseState($state)
