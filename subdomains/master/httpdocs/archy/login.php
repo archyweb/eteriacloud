@@ -62,9 +62,9 @@
         $login_mode = in_array($form_action, $allowed_modes, true) ? $form_action : 'login';
 
         try {
-            // Validate before checking credentials or sending a login OTP.
-            // Unknown actions also reach the password login branch below.
-            if (!in_array($form_action, ['forgot_password', 'reset_password', 'force_password_change', 'login_otp'], true)) {
+            // OTP steps validate the session-bound token created after password and Turnstile verification.
+            // Unknown actions still reach the password login branch and require Turnstile.
+            if (!in_array($form_action, ['forgot_password', 'reset_password', 'force_password_change', 'login_otp', 'login_otp_choice', 'login_totp'], true)) {
                 if (!ArchyTurnstile::verify($_POST['cf-turnstile-response'] ?? '')) {
                     throw new RuntimeException('Verifica anti-bot non riuscita. Riprova completando il controllo di sicurezza.');
                 }
